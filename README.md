@@ -1,342 +1,396 @@
 <div align="center">
 
-# 📷 PiCam
+# 📷 OnviPi
 
-**Raspberry Pi + USB-Webcam → Überwachungskamera für Home Assistant**
+**Turn a Raspberry Pi and a USB webcam into an ONVIF camera for Home Assistant**
 
-Meldet sich in Home Assistant als **ONVIF-Kamera mit Livebild _und_ Bewegungssensor** –
-lokal, ohne Cloud, ohne Abo.
+Shows up in Home Assistant as an **ONVIF camera with live view _and_ motion sensor** –
+local, no cloud, no subscription.
 
-[![Release](https://img.shields.io/github/v/release/GERGto/PiCam?label=Release)](https://github.com/GERGto/PiCam/releases/latest)
-[![Build](https://img.shields.io/github/actions/workflow/status/GERGto/PiCam/release.yml?label=Build)](https://github.com/GERGto/PiCam/actions/workflows/release.yml)
-[![Lizenz: MIT](https://img.shields.io/badge/Lizenz-MIT-blue)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/GERGto/OnviPi?label=Release)](https://github.com/GERGto/OnviPi/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/GERGto/OnviPi/release.yml?label=Build)](https://github.com/GERGto/OnviPi/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 
-**[⬇️ Image herunterladen](https://github.com/GERGto/PiCam/releases/latest/download/picam-arm64.img.xz)** ·
-**[📦 Alle Releases](https://github.com/GERGto/PiCam/releases)** ·
-**[📝 Änderungen](CHANGELOG.md)**
+**[⬇️ Download OnviPiOS](https://github.com/GERGto/OnviPi/releases/latest/download/onvipios-arm64.img.xz)** ·
+**[📦 All releases](https://github.com/GERGto/OnviPi/releases)** ·
+**[📝 Changelog](CHANGELOG.md)**
 
 </div>
 
 ---
 
-- 📹 **Livebild** über ONVIF/WebRTC (go2rtc), geringe Latenz
-- 🟢 **Lokale Bewegungserkennung** als ONVIF-Ereignis – ideal für Licht- und Alarm-Automationen
-- 📶 **Einrichtung per Handy:** Hotspot mit Schritt-für-Schritt-Assistent, kein SSH nötig
-- 🔒 **Alles bleibt im Heimnetz,** Zugangsdaten liegen nur auf dem Pi
+- 📹 **Live view** via ONVIF/WebRTC (go2rtc) with low latency
+- 🟢 **Local motion detection** as an ONVIF event – ideal for light and alarm automations
+- 📶 **Setup from your phone:** hotspot with a step-by-step wizard, no SSH needed
+- 💿 **OnviPiOS:** ready-to-flash image based on Raspberry Pi OS Lite
+- 🔒 **Everything stays on your network,** credentials are stored only on the Pi
 
-## Inhalt
+## Screenshots
 
-1. [Installation](#1-installation)
-2. [In Home Assistant einbinden](#2-in-home-assistant-einbinden)
-3. [Einrichtungs-Assistent](#3-einrichtungs-assistent)
-4. [Konfiguration](#4-konfiguration)
-5. [Systemaufbau](#5-systemaufbau)
-6. [Fehlersuche](#6-fehlersuche)
-7. [Sicherheit](#7-sicherheit)
-8. [Entwicklung](#8-entwicklung)
+Set up from your phone via the hotspot – step by step:
+
+<table>
+  <tr>
+    <td align="center" valign="top" width="25%"><img src="docs/screenshots/wizard-2-camera.png" alt="Wizard: choose camera" width="200"><br><sub><b>Camera</b><br>name, device, format, resolution</sub></td>
+    <td align="center" valign="top" width="25%"><img src="docs/screenshots/wizard-3-preview.png" alt="Wizard: preview" width="200"><br><sub><b>Preview</b><br>current picture (test pattern here)</sub></td>
+    <td align="center" valign="top" width="25%"><img src="docs/screenshots/wizard-4-access.png" alt="Wizard: access to the Pi" width="200"><br><sub><b>Access</b><br>user, password, SSH, region</sub></td>
+    <td align="center" valign="top" width="25%"><img src="docs/screenshots/wizard-5-wifi.png" alt="Wizard: Wi-Fi" width="200"><br><sub><b>Wi-Fi</b><br>pick a network or stay on Ethernet</sub></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top"><img src="docs/screenshots/wizard-1-start.png" alt="Wizard: start" width="200"><br><sub><b>Start</b></sub></td>
+    <td align="center" valign="top"><img src="docs/screenshots/wizard-6-done.png" alt="Wizard: Home Assistant credentials" width="200"><br><sub><b>Done</b><br>credentials for Home Assistant</sub></td>
+    <td align="center" valign="top" colspan="2"><img src="docs/screenshots/settings.png" alt="Settings page" width="200"><br><sub><b>Settings page</b> during normal operation<br>(<code>http://onvipi-&lt;name&gt;.local</code>)</sub></td>
+  </tr>
+</table>
+
+<sub>All data shown in the screenshots are examples.</sub>
+
+## Contents
+
+1. [Requirements](#1-requirements)
+2. [Installation](#2-installation)
+3. [Add to Home Assistant](#3-add-to-home-assistant)
+4. [Setup wizard](#4-setup-wizard)
+5. [Configuration](#5-configuration)
+6. [How it works](#6-how-it-works)
+7. [Troubleshooting](#7-troubleshooting)
+8. [Security](#8-security)
+9. [Development](#9-development)
 
 ---
 
-## 1. Installation
+## 1. Requirements
 
-**Du brauchst:** Raspberry Pi 4 (andere 64-Bit-Modelle wie Pi 3B+, 5 oder Zero 2 W sollten
-ebenfalls laufen), microSD-Karte ab 8 GB, USB-Webcam (UVC).
+### Hardware
 
-| Weg | Für wen | Download |
+| Component | Requirement |
+|---|---|
+| **Raspberry Pi** | **Raspberry Pi 4 Model B with 1 GB RAM or more** (tested). The Raspberry Pi 5 should work as well but is untested. Pi 3B+ and Zero 2 W are untested and probably too slow for software encoding. |
+| **SD card** | microSD with 8 GB or more, class A1 or better recommended |
+| **Power supply** | official USB-C power supply 5 V / 3 A – Pi and webcam need a stable supply |
+| **Webcam** | USB webcam following the UVC standard (“driverless”). Ideal: MJPEG or H.264 at 1280×720. YUYV-only cameras run at 640×480. |
+| **Network** | Wi-Fi (2.4 or 5 GHz) or Ethernet. The setup hotspot uses 2.4 GHz. |
+
+### Software
+
+| Component | Requirement |
+|---|---|
+| **Operating system** | OnviPiOS: included in the image. Package: Raspberry Pi OS Lite **64-bit**, Bookworm or Trixie (with NetworkManager) |
+| **Home Assistant** | a current version with the built-in **ONVIF integration**, on the same network as the camera (multicast allowed) |
+| **For setup** | a phone or laptop with Wi-Fi; for OnviPiOS also a computer with [Raspberry Pi Imager](https://www.raspberrypi.com/software/) |
+
+### Load (Pi 4)
+
+Software encoding (libx264) uses **about one of the four CPU cores at 1280×720 and 30 fps**; a
+heatsink is recommended. Higher resolutions have not been measured – reduce `VIDEO_SIZE` or
+`FRAMERATE` under high load. Motion detection only runs while Home Assistant is subscribed to
+events. 1 GB of RAM is not the bottleneck.
+
+---
+
+## 2. Installation
+
+| Method | For | Download |
 |---|---|---|
-| **A – Fertiges Image** | Neues Gerät, Einrichtung komplett per Handy | [`picam-arm64.img.xz`](https://github.com/GERGto/PiCam/releases/latest/download/picam-arm64.img.xz) |
-| **B – Paket** | Vorhandenes Raspberry Pi OS mit SSH-Zugang | [`picam.tar.gz`](https://github.com/GERGto/PiCam/releases/latest/download/picam.tar.gz) |
+| **A – OnviPiOS image** | a new device, set up entirely from your phone | [`onvipios-arm64.img.xz`](https://github.com/GERGto/OnviPi/releases/latest/download/onvipios-arm64.img.xz) |
+| **B – Package** | an existing Raspberry Pi OS with SSH access | [`onvipi.tar.gz`](https://github.com/GERGto/OnviPi/releases/latest/download/onvipi.tar.gz) |
 
-Prüfsummen stehen jeweils als `SHA256SUMS` im [Release](https://github.com/GERGto/PiCam/releases/latest).
+Checksums are published as `SHA256SUMS` with each [release](https://github.com/GERGto/OnviPi/releases/latest).
 
-### Weg A – Fertiges Image
+### A – OnviPiOS image
 
-1. **[Image herunterladen](https://github.com/GERGto/PiCam/releases/latest/download/picam-arm64.img.xz)**.
-2. Mit dem [Raspberry Pi Imager](https://www.raspberrypi.com/software/) auf die SD-Karte
-   schreiben: *Gerät* → Raspberry Pi 4, *Betriebssystem* → **Eigenes Image verwenden**.
-   Die Frage nach eigenen Einstellungen mit **Nein** beantworten – Benutzer, SSH und WLAN
-   legst du im Assistenten fest.
-3. Webcam anstecken, Pi starten. Nach **2–3 Minuten** erscheint das offene WLAN
-   **`PiCam-Setup-XXXX`** – auch wenn ein LAN-Kabel steckt.
-4. Mit dem Handy verbinden. Der Assistent öffnet sich von selbst (sonst `http://10.42.0.1`):
-   **Kamera → Vorschau → Zugang → WLAN**.
+1. **[Download OnviPiOS](https://github.com/GERGto/OnviPi/releases/latest/download/onvipios-arm64.img.xz)**.
+2. Write it to the SD card with [Raspberry Pi Imager](https://www.raspberrypi.com/software/):
+   *Device* → Raspberry Pi 4, *Operating system* → **Use custom**. Answer **No** when asked
+   about OS customisation – user, SSH and Wi-Fi are set in the wizard.
+3. Plug in the webcam and power on the Pi. After **2–3 minutes** the open Wi-Fi
+   **`OnviPi-Setup-XXXX`** appears – even if an Ethernet cable is connected.
+4. Join it with your phone. The wizard opens automatically (otherwise go to `http://10.42.0.1`):
+   **Camera → Preview → Access → Wi-Fi**.
 
-Danach ist die Kamera unter `http://picam-<name>.local` erreichbar. Am Ende zeigt der
-Assistent die Zugangsdaten für Home Assistant – am besten ein Bildschirmfoto machen.
+Afterwards the camera is reachable at `http://onvipi-<name>.local`. At the end the wizard
+shows the credentials for Home Assistant – take a screenshot.
 
-### Weg B – Paket auf vorhandenem Raspberry Pi OS
+### B – Package on an existing Raspberry Pi OS
 
-Voraussetzung: Raspberry Pi OS Lite 64-bit (Bookworm oder Trixie) mit SSH-Zugang.
+Requires Raspberry Pi OS Lite 64-bit (Bookworm or Trixie) with SSH access.
 
 ```bash
-curl -fsSL https://github.com/GERGto/PiCam/releases/latest/download/picam.tar.gz | tar xz
-sudo bash picam/install.sh "Keller"        # "Keller" = Name der Kamera
+curl -fsSL https://github.com/GERGto/OnviPi/releases/latest/download/onvipi.tar.gz | tar xz
+sudo bash onvipi/install.sh "Garden"        # "Garden" = camera name
 ```
 
-Der Installer installiert die Pakete, lädt go2rtc, erkennt die Webcam (Format, Auflösung,
-Bildrate), erzeugt ein Zufallspasswort und startet alle Dienste. Zum Schluss zeigt er die
-Zugangsdaten an; sie stehen auch in `/etc/picam/picam.conf`.
+The installer installs the packages, downloads go2rtc, detects the webcam (format, resolution,
+frame rate), generates a random password and starts all services. At the end it prints the
+credentials; they are also stored in `/etc/onvipi/onvipi.conf`.
 
-**Aktualisieren:** dieselben zwei Befehle erneut ausführen – die Einstellungen bleiben erhalten.
+**Update:** run the same two commands again – settings are kept.
 
-| Option | Wirkung |
+| Option | Effect |
 |---|---|
-| `WIFI_COUNTRY=AT sudo -E bash picam/install.sh …` | WLAN-Land (Standard `DE`) |
-| `MQTT_USER=… MQTT_PASSWORD=… sudo -E bash picam/install.sh …` | optionale MQTT-Diagnose-Sensoren |
+| `sudo WIFI_COUNTRY=GB bash onvipi/install.sh …` | Wi-Fi country (default `DE`) |
+| `sudo MQTT_USER=… MQTT_PASSWORD=… bash onvipi/install.sh …` | optional MQTT diagnostic sensors |
 
-**Prüfen:** Livebild im Browser unter `http://<pi>.local:1984` → *Streams → picam*.
+**Check:** open `http://<pi>.local:1984` in a browser → *Streams → onvipi*.
+
+### Coming from PiCam?
+
+OnviPi was previously called **PiCam**. Installing the package on a PiCam device migrates it
+automatically: settings, camera password and Wi-Fi networks are kept, and Home Assistant keeps
+the device (the ONVIF device ID does not change). The old configuration is kept as a backup in
+`/etc/picam.migrated-<date>`.
 
 ---
 
-## 2. In Home Assistant einbinden
+## 3. Add to Home Assistant
 
-Die Kamera meldet sich per ONVIF – **ein Gerät mit Livebild und Bewegungssensor**:
+The camera registers via ONVIF – **one device with live view and motion sensor**:
 
-1. **Einstellungen → Geräte & Dienste → Integration hinzufügen → ONVIF**
-2. Die Kamera sollte im Scan erscheinen. Falls nicht: *Manuell konfigurieren* mit
-   **Host** = IP des Pi, **Port** `8000`, **Benutzer** `admin`, **Passwort** = Kamera-Passwort.
-3. Fertig: Es erscheinen eine **Kamera-Entität** (Livebild per WebRTC) und ein
-   **`binary_sensor` „Bewegung“**.
+1. **Settings → Devices & services → Add integration → ONVIF**
+2. The camera should appear in the scan. If not, choose *Configure manually* with
+   **Host** = IP of the Pi, **Port** `8000`, **Username** `admin`, **Password** = camera password.
+3. Done: you get a **camera entity** (live view via WebRTC) and a
+   **`binary_sensor` “Motion”**.
 
 > [!NOTE]
-> Home Assistant zeigt ONVIF-Kameras **nicht** von selbst unter „Entdeckt“ an – die
-> Integration einmal wie oben hinzufügen. Danach erkennt HA die Kamera über ihre MAC-Adresse
-> wieder, auch bei neuer IP. HA und Pi müssen im selben Netz sein, Multicast darf nicht
-> blockiert sein (kein Gäste-WLAN).
+> Home Assistant does **not** list ONVIF cameras under “Discovered” on its own – add the
+> integration once as shown above. Afterwards HA recognises the camera by its MAC address, even
+> with a new IP. HA and the Pi must be on the same network and multicast must not be blocked
+> (no guest Wi-Fi).
 
-Das **Kamera-Passwort** findest du im Assistenten, auf der Einstellungsseite oder per SSH mit
-`sudo grep CAM_PASSWORD /etc/picam/picam.conf`.
+You find the **camera password** in the wizard, on the settings page or via SSH with
+`sudo grep CAM_PASSWORD /etc/onvipi/onvipi.conf`.
 
 ---
 
-## 3. Einrichtungs-Assistent
+## 4. Setup wizard
 
-Der Pi öffnet das **offene** WLAN `PiCam-Setup-…`, wenn
+The Pi opens the **open** Wi-Fi `OnviPi-Setup-…` when
 
-- noch **kein Benutzer** eingerichtet ist (frisch geflashtes Image) – dann sofort, auch am Kabel,
-- oder er beim Start **kein Netzwerk** findet (kein LAN-Kabel, kein bekanntes WLAN).
+- **no user** has been set up yet (freshly flashed OnviPiOS) – immediately, even on Ethernet,
+- or it finds **no network** at startup (no cable, no known Wi-Fi).
 
-| Schritt | Inhalt |
+| Step | Content |
 |---|---|
-| 1 · Start | Begrüßung |
-| 2 · Kamera | Name, USB-Gerät, Format, Auflösung, Bildrate, Ausrichtung, Uhrzeit im Bild |
-| 3 · Vorschau | Aktuelles Bild der Kamera |
-| 4 · Zugang | Benutzer und Passwort für den Pi, SSH an/aus, WLAN-Land, Zeitzone |
-| 5 · WLAN | Netzwerk wählen und verbinden – oder überspringen, wenn der Pi am Kabel bleibt |
+| 1 · Start | Welcome |
+| 2 · Camera | name, USB device, format, resolution, frame rate, orientation, timestamp |
+| 3 · Preview | current picture from the camera |
+| 4 · Access | user and password for the Pi, SSH on/off, Wi-Fi country, time zone |
+| 5 · Wi-Fi | choose a network and connect – or skip it when the Pi stays on Ethernet |
 
-**Zum Schritt „Zugang“:** Dieser Benutzer ist dein Login am Pi (SSH oder Tastatur) – nicht das
-Kamera-Passwort für Home Assistant, das automatisch erzeugt wird. Der Benutzer lässt sich im
-Assistenten **nur einmal** anlegen. Danach ist dieser Teil gesperrt, damit niemand in
-Reichweite des offenen Hotspots (z. B. bei einem WLAN-Ausfall) das Passwort neu setzen kann.
-SSH schaltest du später auf der Einstellungsseite ein und aus.
+**About the “Access” step:** this user is your login to the Pi (SSH or keyboard) – not the
+camera password for Home Assistant, which is generated automatically. The user can be created
+in the wizard **only once**. After that this part is locked, so nobody within range of the open
+hotspot (for example during a Wi-Fi outage) can reset the password. SSH can be switched on and
+off later on the settings page.
 
-Benennst du die Kamera im Assistenten um, folgt der Hostname (`picam-<name>.local`), solange
-er automatisch vergeben wurde.
+If you rename the camera in the wizard, the hostname follows (`onvipi-<name>.local`) as long as
+it was assigned automatically.
 
-Manuell starten – auch am Kabel:
+Start it manually – also on Ethernet:
 
 ```bash
-sudo picam-wifi portal      # Hotspot + Assistent sofort (Abbruch mit Strg-C)
+sudo onvipi-wifi portal      # hotspot + wizard right away (stop with Ctrl-C)
 ```
 
 ---
 
-## 4. Konfiguration
+## 5. Configuration
 
-### Weboberfläche
+### Settings page
 
-Unter **`http://<pi>.local`** (Port 80) liegt die Einstellungsseite – Anmeldung mit Benutzer
-`admin` und dem Kamera-Passwort. Dort findest du: Vorschaubild, Anleitung und Zugangsdaten für
-Home Assistant, Kamera (Name, Gerät, Format, Auflösung, Bildrate), Bewegungserkennung,
-Passwort ändern, Netzwerkstatus, SSH an/aus und „Dienste neu starten“.
-Nach 5 falschen Anmeldungen ist die Adresse 10 Minuten gesperrt.
+The settings page is at **`http://<pi>.local`** (port 80) – log in with username `admin` and the
+camera password. It contains a preview, instructions and credentials for Home Assistant, the
+camera (name, device, format, resolution, frame rate), motion detection, password change,
+network status, SSH on/off and “Restart services”. After 5 failed logins the address is
+blocked for 10 minutes.
 
 > [!TIP]
-> **Zugriff von unterwegs:** Am sichersten per VPN (z. B. FRITZ!Box-VPN mit WireGuard) – dann
-> ist nichts offen im Internet. Eine Portfreigabe auf Port 80 überträgt das Passwort
-> **unverschlüsselt**. Die Ports `1984`, `8554` und `8000` **nie** freigeben.
+> **Remote access:** a VPN (for example WireGuard on your router) is the safest way – nothing is
+> exposed to the internet. Forwarding port 80 works but sends the password **unencrypted**.
+> **Never** forward ports `1984`, `8554` or `8000`.
 
-### picam.conf
+### onvipi.conf
 
-Alle Einstellungen liegen in `/etc/picam/picam.conf`
-(danach `sudo systemctl restart go2rtc picam-onvif`):
+All settings are stored in `/etc/onvipi/onvipi.conf`
+(afterwards run `sudo systemctl restart onvipi-go2rtc onvipi-onvif`):
 
-| Schlüssel | Bedeutung |
+| Key | Meaning |
 |---|---|
-| `CAM_NAME` | Anzeigename der Kamera |
-| `CAM_USER`, `CAM_PASSWORD` | Zugang für Weboberfläche, RTSP und ONVIF |
-| `VIDEO_DEVICE`, `VIDEO_FORMAT`, `VIDEO_SIZE`, `FRAMERATE` | Webcam-Quelle – automatisch erkannt (bevorzugt MJPEG 1280×720). Fehlt die eingestellte Webcam beim Start, wird neu erkannt. |
-| `ROTATE` | Drehung im Uhrzeigersinn: `0`, `90`/`270` (Hochformat), `180` (kopfüber). Kostet etwas CPU. |
-| `OVERLAY_TIME` | `1` = Datum/Uhrzeit unten rechts im Bild, `0` = aus |
-| `BITRATE` | H.264-Bitrate (Standard `2500k`) |
-| `HW_ENCODE` | `0` = Software-Encoder (**Standard**). `1` = Hardware-Encoder – spart CPU, **lässt aber WebRTC im Browser einfrieren**; dann geht nur RTSP. |
-| `MOTION_ENABLE`, `MOTION_SENSITIVITY` | Bewegungserkennung an/aus und Empfindlichkeit `0`–`100`. Feintuning: `MOTION_FPS`, `MOTION_COOLDOWN`, optional `MOTION_THRESHOLD`. |
-| `ONVIF_PORT` | Port des ONVIF-Servers (Standard `8000`) |
-| `AP_SSID`, `AP_PASSWORD` | Einrichtungs-WLAN (leeres Passwort = offen) |
-| `WIFI_COUNTRY` | WLAN-Land (im Assistenten änderbar) |
-| `HOSTNAME_AUTO` | `1` = Hostname folgt dem Kameranamen im Assistenten |
+| `CAM_NAME` | display name of the camera |
+| `CAM_USER`, `CAM_PASSWORD` | login for settings page, RTSP and ONVIF |
+| `VIDEO_DEVICE`, `VIDEO_FORMAT`, `VIDEO_SIZE`, `FRAMERATE` | webcam source – detected automatically (prefers MJPEG 1280×720). If the configured webcam is missing at startup, it is detected again. |
+| `ROTATE` | clockwise rotation: `0`, `90`/`270` (portrait), `180` (upside down). Costs some CPU. |
+| `OVERLAY_TIME` | `1` = date/time in the bottom right corner, `0` = off |
+| `BITRATE` | H.264 bitrate (default `2500k`) |
+| `HW_ENCODE` | `0` = software encoder (**default**). `1` = hardware encoder – saves CPU but **freezes WebRTC in the browser**; only RTSP works then. |
+| `MOTION_ENABLE`, `MOTION_SENSITIVITY` | motion detection on/off and sensitivity `0`–`100`. Fine-tuning: `MOTION_FPS`, `MOTION_COOLDOWN`, optional `MOTION_THRESHOLD`. |
+| `ONVIF_PORT` | port of the ONVIF server (default `8000`) |
+| `AP_SSID`, `AP_PASSWORD` | setup hotspot (empty password = open) |
+| `WIFI_COUNTRY` | Wi-Fi country (changeable in the wizard) |
+| `HOSTNAME_AUTO` | `1` = the hostname follows the camera name in the wizard |
 
-### Befehle
+### Commands
 
 ```bash
-sudo picam-wifi status      # Netz-, Hotspot- und Benutzerstatus
-sudo picam-wifi reset       # gespeicherte WLANs löschen → Einrichtungsmodus
-sudo picam-wifi portal      # Assistent sofort starten
-systemctl status go2rtc picam-onvif picam-wsd picam-wifi
+sudo onvipi-wifi status     # network, hotspot and user status
+sudo onvipi-wifi reset      # forget saved Wi-Fi networks → setup mode
+sudo onvipi-wifi portal     # start the wizard right away
+systemctl status onvipi-go2rtc onvipi-onvif onvipi-wsd onvipi-wifi
 ```
 
-**Ports:** Weboberfläche `80` · RTSP `8554` (mit Passwort) · go2rtc `1984` · WebRTC `8555` ·
-ONVIF `8000`
+**Ports:** settings page `80` · RTSP `8554` (password protected) · go2rtc `1984` ·
+WebRTC `8555` · ONVIF `8000`
 
 ---
 
-## 5. Systemaufbau
+## 6. How it works
 
-### Komponenten und Datenfluss
+### Components and data flow
 
 ```mermaid
 flowchart LR
-  cam([USB-Webcam]):::hw --> go2rtc
+  cam([USB webcam]):::hw --> go2rtc
 
-  subgraph Pi["Raspberry Pi"]
-    go2rtc["**go2rtc**<br/>RTSP :8554 · WebRTC/API :1984<br/>H.264 (libx264)"]
-    onvif["**picam-onvif** :8000<br/>ONVIF Device · Media · Events<br/>+ Bewegungsanalyse"]
-    wsd["**picam-wsd**<br/>ONVIF-Discovery"]
-    wifi["**picam-wifi** :80<br/>Einstellungsseite<br/>Hotspot + Assistent"]
-    mqtt["picam-mqtt *(optional)*<br/>Diagnose-Sensoren"]
+  subgraph Pi["Raspberry Pi · OnviPi"]
+    go2rtc["**onvipi-go2rtc**<br/>RTSP :8554 · WebRTC/API :1984<br/>H.264 (libx264)"]
+    onvif["**onvipi-onvif** :8000<br/>ONVIF device · media · events<br/>+ motion analysis"]
+    wsd["**onvipi-wsd**<br/>ONVIF discovery"]
+    wifi["**onvipi-wifi** :80<br/>settings page<br/>hotspot + wizard"]
+    mqtt["onvipi-mqtt *(optional)*<br/>diagnostic sensors"]
 
-    go2rtc -->|RTSP / Snapshot| onvif
-    onvif -. "Frame-Diff (Bewegung)" .-> go2rtc
+    go2rtc -->|RTSP / snapshot| onvif
+    onvif -. "frame diff (motion)" .-> go2rtc
   end
 
-  onvif ==>|"ONVIF: Livebild + Bewegung"| HA[(Home Assistant)]
+  onvif ==>|"ONVIF: live view + motion"| HA[(Home Assistant)]
   wsd -. "WS-Discovery" .-> HA
   mqtt -. "MQTT (optional)" .-> HA
 
   classDef hw fill:#eef,stroke:#88a;
 ```
 
-### Ablauf beim Start
+### Startup
 
 ```mermaid
 flowchart TD
-  boot([Pi startet]) --> first{"Erster Start<br/>des Images?"}
-  first -->|ja| fb["picam-firstboot<br/>Hostname · Kamera-Passwort · Webcam"]
+  boot([Pi starts]) --> first{"First boot<br/>of OnviPiOS?"}
+  first -->|yes| fb["onvipi-firstboot<br/>hostname · camera password · webcam"]
   fb --> user
-  first -->|nein| user{"Benutzer<br/>eingerichtet?"}
-  user -->|nein| ap
-  user -->|ja| net{"Netzwerk<br/>vorhanden?"}
-  net -->|ja| run([Dienste laufen<br/>Kamera bereit])
-  net -->|nein| ap[/"offener Hotspot<br/>PiCam-Setup-…"/]
-  ap --> wiz["Assistent<br/>Kamera · Vorschau · Zugang · WLAN"]
-  wiz -->|WLAN verbunden<br/>oder am Kabel| run
+  first -->|no| user{"User<br/>set up?"}
+  user -->|no| ap
+  user -->|yes| net{"Network<br/>available?"}
+  net -->|yes| run([services running<br/>camera ready])
+  net -->|no| ap[/"open hotspot<br/>OnviPi-Setup-…"/]
+  ap --> wiz["Wizard<br/>camera · preview · access · Wi-Fi"]
+  wiz -->|Wi-Fi connected<br/>or on Ethernet| run
 ```
 
-### Bewegung in Home Assistant (ONVIF-Events)
+### Motion in Home Assistant (ONVIF events)
 
 ```mermaid
 sequenceDiagram
   participant HA as Home Assistant
-  participant O as picam-onvif
-  participant F as ffmpeg-Analyse
-  HA->>O: ONVIF entdecken · GetProfiles / GetStreamUri
+  participant O as onvipi-onvif
+  participant F as ffmpeg analysis
+  HA->>O: discover ONVIF · GetProfiles / GetStreamUri
   HA->>O: CreatePullPointSubscription
-  O->>F: Frame-Diff starten (nur bei aktivem Abo)
-  loop Longpoll
+  O->>F: start frame diff (only while subscribed)
+  loop long poll
     HA->>O: PullMessages
-    F-->>O: Score > Schwelle → Bewegung
+    F-->>O: score > threshold → motion
     O-->>HA: IsMotion = true / false
   end
 ```
 
-**Warum ein eigener ONVIF-Server?** Das eingebaute ONVIF von go2rtc kann keine
-Bewegungs-Events. `picam-onvif` spricht ONVIF selbst (Device, Media, Events) und verweist fürs
-Video auf go2rtc – so erscheint in HA **ein** Gerät mit Livebild _und_ Bewegung, ganz ohne
-MQTT-Broker.
+**Why a separate ONVIF server?** go2rtc's built-in ONVIF does not support motion events.
+`onvipi-onvif` speaks ONVIF itself (device, media, events) and points to go2rtc for the video –
+so Home Assistant gets **one** device with live view _and_ motion, without an MQTT broker.
 
-**Wie wird Bewegung erkannt?** ffmpeg zieht winzige Graubilder (64×36) aus dem Stream,
-`picam-onvif` misst die mittlere Pixeldifferenz zweier Bilder. Liegt sie über der aus
-`MOTION_SENSITIVITY` abgeleiteten Schwelle (mit Entprellung), gilt das als Bewegung. Die Analyse
-läuft **nur, solange HA Ereignisse abonniert** – das spart Strom und CPU.
+**How is motion detected?** ffmpeg extracts tiny grayscale frames (64×36) from the stream and
+`onvipi-onvif` measures the mean pixel difference between two frames. If it exceeds the
+threshold derived from `MOTION_SENSITIVITY` (with debouncing), it counts as motion. The analysis
+runs **only while Home Assistant is subscribed to events** – that saves power and CPU.
 
-### Dienste
+### Services
 
-| Dienst | Aufgabe |
+| Service | Purpose |
 |---|---|
-| `go2rtc` | Video: Kamera → H.264, RTSP, WebRTC, Snapshot |
-| `picam-onvif` | ONVIF-Server (Verweis aufs Livebild + Bewegungs-Events) |
-| `picam-wsd` | ONVIF-Discovery (macht die Kamera in HA auffindbar) |
-| `picam-wifi` | Einstellungsseite, Hotspot und Einrichtungs-Assistent |
-| `picam-mqtt` | *optional:* Diagnose-Sensoren (CPU-Temperatur, WLAN, IP) via MQTT |
-| `picam-firstboot` | *nur Image:* einmalige Ersteinrichtung beim ersten Start |
+| `onvipi-go2rtc` | video: camera → H.264, RTSP, WebRTC, snapshot |
+| `onvipi-onvif` | ONVIF server (live view reference + motion events) |
+| `onvipi-wsd` | ONVIF discovery (makes the camera discoverable in HA) |
+| `onvipi-wifi` | settings page, hotspot and setup wizard |
+| `onvipi-mqtt` | *optional:* diagnostic sensors (CPU temperature, Wi-Fi, IP) via MQTT |
+| `onvipi-firstboot` | *OnviPiOS only:* one-time setup on first boot |
 
 ---
 
-## 6. Fehlersuche
+## 7. Troubleshooting
 
-| Symptom | Ursache / Lösung |
+| Symptom | Cause / solution |
 |---|---|
-| **Hotspot erscheint nicht (Image)** | Erster Start dauert länger (Dateisystem wird vergrößert, ein Neustart). 5 Minuten warten. Bildschirm anschließen und `journalctl -u picam-firstboot -u picam-wifi` prüfen. |
-| **Hotspot erscheint nicht (eingerichtetes Gerät)** | Der Hotspot startet nur ohne Netz. Am Kabel: `sudo picam-wifi portal`. |
-| **Kamera-Passwort unbekannt** | Per SSH: `sudo grep CAM_PASSWORD /etc/picam/picam.conf`. Wurden beim Flashen Imager-Einstellungen gesetzt, gilt der Pi sofort als eingerichtet – das Passwort steht dann nur dort. |
-| **Livebild läuft kurz, dann Standbild** | `HW_ENCODE='1'` gesetzt – auf `0` stellen. |
-| **Bild ruckelt / CPU hoch** | `VIDEO_SIZE` oder `FRAMERATE` verkleinern. |
-| **Kein Bild** | `http://<pi>:1984` → *Streams → picam*. `VIDEO_FORMAT`/`VIDEO_SIZE` prüfen. |
-| **Bewegung löst nie / ständig aus** | `MOTION_SENSITIVITY` anpassen; beobachten mit `journalctl -u picam-onvif -f`. |
-| **HA findet die Kamera nicht** | Selbes Netz? Multicast frei? Sonst ONVIF *manuell*: Host `<Pi-IP>`, Port `8000`. |
-| **In HA eingerichtet, aber kein Livebild** | Falsche Zugangsdaten (HA nutzt sie auch für RTSP). ONVIF-Eintrag löschen und mit `admin` + Passwort neu anlegen. |
-| **„Unerwarteter Fehler“ bei ONVIF** | `journalctl -u picam-onvif` auf „Unbekannte ONVIF-Operation“ prüfen. |
+| **Hotspot does not appear (OnviPiOS)** | The first boot takes longer (file system is expanded, one reboot). Wait 5 minutes. Connect a screen and check `journalctl -u onvipi-firstboot -u onvipi-wifi`. |
+| **Hotspot does not appear (configured device)** | The hotspot only starts without a network. On Ethernet: `sudo onvipi-wifi portal`. |
+| **Camera password unknown** | Via SSH: `sudo grep CAM_PASSWORD /etc/onvipi/onvipi.conf`. If OS customisation was set in Raspberry Pi Imager, the Pi counts as set up immediately – the password is only stored there. |
+| **Live view runs briefly, then freezes** | `HW_ENCODE='1'` is set – change it to `0`. |
+| **Stuttering picture / high CPU** | reduce `VIDEO_SIZE` or `FRAMERATE`. |
+| **No picture** | `http://<pi>:1984` → *Streams → onvipi*. Check `VIDEO_FORMAT`/`VIDEO_SIZE`. |
+| **Motion never / always triggers** | adjust `MOTION_SENSITIVITY`; watch with `journalctl -u onvipi-onvif -f`. |
+| **HA does not find the camera** | same network? multicast allowed? Otherwise add ONVIF *manually*: host `<Pi IP>`, port `8000`. |
+| **Added in HA, but no live view** | wrong credentials (HA also uses them for RTSP). Delete the ONVIF entry and add it again with `admin` + password. |
+| **“Unexpected error” in the ONVIF setup** | check `journalctl -u onvipi-onvif` for “Unknown ONVIF operation”. |
 
 ---
 
-## 7. Sicherheit
+## 8. Security
 
-- **Keine gemeinsamen Geheimnisse im Image:** Kamera-Passwort, SSH-Hostschlüssel und
-  Geräte-ID (`machine-id`) entstehen beim ersten Start auf jedem Gerät neu.
-- **SSH ist aus,** bis du es im Assistenten oder auf der Einstellungsseite einschaltest.
-- **RTSP, ONVIF und Weboberfläche** sind mit Benutzer und Passwort geschützt (zufällig erzeugt,
-  `/etc/picam/picam.conf`, Rechte `0640`). Die Weboberfläche sperrt nach Fehlversuchen und
-  nimmt Formulare nur von sich selbst an.
-- **Der Assistent im Hotspot ist offen,** kann aber nur dann einen Login-Benutzer anlegen,
-  wenn es noch keinen gibt.
-- **go2rtc auf Port `1984`** ist im Heimnetz ohne Passwort erreichbar – nie ins Internet
-  weiterleiten.
-- **Kein Cloud-Dienst,** keine ausgehenden Verbindungen außer zu deinem Home Assistant.
+- **No shared secrets in the image:** camera password, SSH host keys and device ID
+  (`machine-id`) are generated on every device at first boot.
+- **SSH is off** until you enable it in the wizard or on the settings page.
+- **RTSP, ONVIF and the settings page** are protected with username and password (randomly
+  generated, `/etc/onvipi/onvipi.conf`, mode `0640`). The settings page locks out after failed
+  logins and only accepts forms from itself.
+- **The wizard on the hotspot is open,** but it can only create a login user while none exists.
+- **go2rtc on port `1984`** is reachable on your network without a password – never forward it
+  to the internet.
+- **No cloud service,** no outgoing connections except to your Home Assistant.
 
 ---
 
-## 8. Entwicklung
+## 9. Development
 
-### Aufbau des Repos
+### Repository layout
 
-| Pfad | Inhalt |
+| Path | Content |
 |---|---|
-| [`picam/`](picam) | Inhalt des Pakets: `install.sh`, Dienste (`pi/`), systemd-Units, NetworkManager-Konfiguration |
-| [`picam/setup/base.sh`](picam/setup/base.sh) | Geräteunabhängiger Teil (Pakete, go2rtc, Dateien) – für Image **und** `install.sh` |
-| [`picam/setup/firstboot.sh`](picam/setup/firstboot.sh) | Gerätespezifischer Teil (Passwort, Hostname, Webcam) – erster Start bzw. `install.sh` |
-| [`image/build-image.sh`](image/build-image.sh) | Baut das Image aus Raspberry Pi OS Lite arm64 (chroot, nativ auf arm64) |
-| [`tools/package.sh`](tools/package.sh) | Baut `picam.tar.gz` |
-| [`.github/workflows/release.yml`](.github/workflows/release.yml) | Baut beides und veröffentlicht das Release |
+| [`onvipi/`](onvipi) | package content: `install.sh`, services (`pi/`), systemd units, NetworkManager config |
+| [`onvipi/setup/base.sh`](onvipi/setup/base.sh) | device-independent part (packages, go2rtc, files) – for the image **and** `install.sh` |
+| [`onvipi/setup/firstboot.sh`](onvipi/setup/firstboot.sh) | device-specific part (password, hostname, webcam) – first boot or `install.sh` |
+| [`onvipi/setup/migrate.sh`](onvipi/setup/migrate.sh) | takes over an existing PiCam installation |
+| [`image/build-image.sh`](image/build-image.sh) | builds OnviPiOS from Raspberry Pi OS Lite arm64 (chroot, native on arm64) |
+| [`tools/package.sh`](tools/package.sh) | builds `onvipi.tar.gz` |
+| [`tools/release-notes.sh`](tools/release-notes.sh) | generates the release notes from the changelog |
+| [`.github/workflows/release.yml`](.github/workflows/release.yml) | builds both and publishes the release |
 
-### Release erstellen
+### Creating a release
 
-1. Abschnitt für die neue Version in [`CHANGELOG.md`](CHANGELOG.md) ergänzen
-   (Überschrift `## [1.2] – JJJJ-MM-TT`).
-2. Taggen und pushen:
+1. Add a section for the new version to [`CHANGELOG.md`](CHANGELOG.md)
+   (heading `## [2.1] – YYYY-MM-DD`).
+2. Tag and push:
    ```bash
-   git tag v1.2 && git push origin v1.2
+   git tag v2.1 && git push origin v2.1
    ```
-3. GitHub Actions baut auf einem arm64-Runner Image und Paket (ca. 15–25 Minuten) und
-   veröffentlicht das Release mit `picam-arm64.img.xz`, `picam.tar.gz` und `SHA256SUMS`.
-   Die Release-Notes kommen aus dem Changelog, ergänzt um die Download-Links.
+3. GitHub Actions builds the image and the package on an arm64 runner (about 15–25 minutes) and
+   publishes the release with `onvipios-arm64.img.xz`, `onvipi.tar.gz` and `SHA256SUMS`.
+   The release notes come from the changelog, plus the download links.
 
-Ein Testlauf ohne Release: *Actions → Release → Run workflow*. Die Dateien liegen dann als
-Artefakte am Lauf.
+For a test run without a release use *Actions → Release → Run workflow*. The files are then
+attached to the run as artifacts.
 
 ---
 
-## Lizenz
+## License
 
-MIT – siehe [LICENSE](LICENSE). go2rtc und Raspberry Pi OS stehen unter ihren eigenen
-Lizenzen. Das Image basiert auf Raspberry Pi OS, ist aber kein offizielles Produkt von
-Raspberry Pi Ltd.
+MIT – see [LICENSE](LICENSE). go2rtc and Raspberry Pi OS are subject to their own licenses.
+OnviPiOS is based on Raspberry Pi OS but is not an official Raspberry Pi Ltd product.
+“Home Assistant” is a trademark of its respective owner; OnviPi is an independent project.

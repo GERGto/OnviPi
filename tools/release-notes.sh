@@ -1,59 +1,60 @@
 #!/usr/bin/env bash
-# Erzeugt die Release-Notes: Download-Links, Kurzanleitung und den passenden
-# Abschnitt aus CHANGELOG.md.
+# Generates the release notes: download links, quick start and the matching
+# section from CHANGELOG.md.
 #
-#   tools/release-notes.sh <version> <tag> <owner/repo> [basis-image-url] [go2rtc-version]
+#   tools/release-notes.sh <version> <tag> <owner/repo> [base-image-url] [go2rtc-version]
 set -euo pipefail
 
-VER="${1:?Version fehlt}"
-TAG="${2:?Tag fehlt}"
-REPO="${3:?Repository fehlt}"
+VER="${1:?missing version}"
+TAG="${2:?missing tag}"
+REPO="${3:?missing repository}"
 BASE="${4:-}"
 GO2RTC="${5:-}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DL="https://github.com/$REPO/releases/download/$TAG"
 
-# Abschnitt "## [<version>] …" bis zur nächsten Versionsüberschrift
+# Section "## [<version>] …" up to the next version heading
 CHANGES="$(awk -v v="$VER" '
   index($0, "## [" v "]") == 1 { on = 1; next }
   on && /^## \[/ { exit }
   on { print }
 ' "$ROOT/CHANGELOG.md" | sed '/./,$!d')"
-[ -n "$CHANGES" ] || CHANGES="Siehe [CHANGELOG.md](https://github.com/$REPO/blob/$TAG/CHANGELOG.md)."
+[ -n "$CHANGES" ] || CHANGES="See [CHANGELOG.md](https://github.com/$REPO/blob/$TAG/CHANGELOG.md)."
 
 cat <<EOF
 ## ⬇️ Downloads
 
-| Datei | Wofür |
+| File | Use |
 |---|---|
-| **[picam-arm64.img.xz]($DL/picam-arm64.img.xz)** | **Weg A:** fertiges Image zum Flashen – neues Gerät, Einrichtung per Handy |
-| **[picam.tar.gz]($DL/picam.tar.gz)** | **Weg B:** Paket für ein vorhandenes Raspberry Pi OS |
-| [SHA256SUMS]($DL/SHA256SUMS) | Prüfsummen |
+| **[onvipios-arm64.img.xz]($DL/onvipios-arm64.img.xz)** | **OnviPiOS** – ready-to-flash image for a new device, set up from your phone |
+| **[onvipi.tar.gz]($DL/onvipi.tar.gz)** | **Package** for an existing Raspberry Pi OS |
+| [SHA256SUMS]($DL/SHA256SUMS) | Checksums |
 
-## 🚀 Installation
+## 🚀 Quick start
 
-**Weg A – Image**
-1. [\`picam-arm64.img.xz\`]($DL/picam-arm64.img.xz) mit dem [Raspberry Pi Imager](https://www.raspberrypi.com/software/) flashen
-   (*Eigenes Image verwenden*, eigene Einstellungen: **Nein**).
-2. Webcam anstecken, Pi starten und nach 2–3 Minuten mit dem WLAN **\`PiCam-Setup-XXXX\`** verbinden.
-3. Der Assistent führt durch Kamera, Vorschau, Zugang (Benutzer, Passwort, SSH, Land, Zeitzone) und WLAN.
+**OnviPiOS image**
+1. Flash [\`onvipios-arm64.img.xz\`]($DL/onvipios-arm64.img.xz) with [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
+   (*Use custom*, OS customisation: **No**).
+2. Plug in the webcam, power on the Pi and after 2–3 minutes join the Wi-Fi **\`OnviPi-Setup-XXXX\`**.
+3. The wizard guides you through camera, preview, access (user, password, SSH, country, time zone) and Wi-Fi.
 
-**Weg B – vorhandenes Raspberry Pi OS (Lite 64-bit, Bookworm/Trixie)**
+**Package on an existing Raspberry Pi OS (Lite 64-bit, Bookworm/Trixie)**
 \`\`\`bash
-curl -fsSL $DL/picam.tar.gz | tar xz
-sudo bash picam/install.sh "Keller"
+curl -fsSL $DL/onvipi.tar.gz | tar xz
+sudo bash onvipi/install.sh "Garden"
 \`\`\`
+An existing PiCam installation is migrated automatically – settings and the Home Assistant device are kept.
 
-Ausführliche Anleitung: [README](https://github.com/$REPO/blob/$TAG/README.md)
+Full documentation: [README](https://github.com/$REPO/blob/$TAG/README.md)
 
-## 📝 Änderungen
+## 📝 Changes
 
 $CHANGES
 EOF
 
 if [ -n "$BASE$GO2RTC" ]; then
   printf '\n---\n<sub>'
-  [ -n "$BASE" ] && printf 'Basis: %s' "$(basename "$BASE")"
+  [ -n "$BASE" ] && printf 'Based on %s' "$(basename "$BASE")"
   [ -n "$BASE" ] && [ -n "$GO2RTC" ] && printf ' · '
   [ -n "$GO2RTC" ] && printf 'go2rtc %s' "$GO2RTC"
   printf '</sub>\n'

@@ -1,10 +1,10 @@
 [Unit]
-Description=PiCam WLAN-Einrichtung (Hotspot + Captive Portal)
+Description=OnviPi settings page, setup hotspot and wizard
 After=NetworkManager.service
 Wants=NetworkManager.service
 
 [Service]
-ExecStart=/usr/bin/python3 /opt/picam/picam_wifi.py run
+ExecStart=/usr/bin/python3 /opt/onvipi/onvipi_wifi.py run
 Restart=always
 RestartSec=10
 

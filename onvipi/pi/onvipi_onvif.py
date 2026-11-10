@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Eigener ONVIF-Server für PiCam: Device + Media + Events (Bewegung).
+"""Eigener ONVIF-Server für OnviPi: Device + Media + Events (Bewegung).
 
 go2rtcs eingebauter ONVIF-Server kann keine Events und lässt sich nicht erweitern.
 Dieser schlanke Server spricht die ONVIF-SOAP-Operationen selbst, die die
@@ -18,7 +18,7 @@ bildet die Differenz aufeinanderfolgender Bilder und misst deren mittlere Hellig
 (signalstats.YAVG). Schwelle aus MOTION_SENSITIVITY (0-100). Der Analyse-ffmpeg läuft
 nur, solange mindestens eine Event-Subscription aktiv ist (spart CPU).
 
-Hört auf ONVIF_PORT (Standard 8000). picam_wsd verweist darauf.
+Hört auf ONVIF_PORT (Standard 8000). onvipi_wsd verweist darauf.
 """
 import base64
 import hashlib
@@ -34,12 +34,12 @@ import time
 import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from picamlib import (CONF, device_id, load_conf, primary_interface, primary_ip,  # noqa: E402
+from onvipilib import (CONF, device_id, load_conf, primary_interface, primary_ip,  # noqa: E402
                       primary_mac)
-from picam_camera import output_size  # noqa: E402
+from onvipi_camera import output_size  # noqa: E402
 
-log = logging.getLogger("picam-onvif")
-PORT = int(os.environ.get("PICAM_ONVIF_PORT", os.environ.get("ONVIF_PORT", "8000")))
+log = logging.getLogger("onvipi-onvif")
+PORT = int(os.environ.get("ONVIPI_ONVIF_PORT", os.environ.get("ONVIF_PORT", "8000")))
 RTSP_PORT = 8554
 GO2RTC_API = 1984
 
@@ -92,7 +92,7 @@ class Motion:
                 self.state = val
                 self.seq += 1
                 self.cond.notify_all()
-                log.info("Bewegung %s", "erkannt" if val else "vorbei")
+                log.info("Motion %s", "detected" if val else "ended")
 
     def wait_change(self, last_seq, timeout):
         with self.cond:
@@ -125,7 +125,7 @@ class Motion:
             try:
                 self._analyze(conf)
             except Exception:
-                log.exception("Bewegungsanalyse abgebrochen")
+                log.exception("Motion analysis aborted")
                 time.sleep(3)
             self.set_state(False)
 
@@ -135,7 +135,7 @@ class Motion:
         thr = self.threshold(conf)
         fps = conf.get("MOTION_FPS", "5")
         cooldown = float(conf.get("MOTION_COOLDOWN", "8") or 8)
-        url = f"rtsp://{conf.get('CAM_USER', 'admin')}:{conf.get('CAM_PASSWORD', '')}@127.0.0.1:{RTSP_PORT}/picam"
+        url = f"rtsp://{conf.get('CAM_USER', 'admin')}:{conf.get('CAM_PASSWORD', '')}@127.0.0.1:{RTSP_PORT}/onvipi"
         w, h = 64, 36
         n = w * h
         vf = f"fps={fps},scale={w}:{h},format=gray"
@@ -143,7 +143,7 @@ class Motion:
                "-rtsp_transport", "tcp", "-i", url, "-an", "-vf", vf,
                "-f", "rawvideo", "-flush_packets", "1", "pipe:1"]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        log.info("Bewegungsanalyse läuft (Schwelle %.1f, %s fps)", thr, fps)
+        log.info("Motion analysis running (threshold %.1f, %s fps)", thr, fps)
         prev, consec, last_over, warm = None, 0, 0.0, 6  # erste Frames (Startruckler) verwerfen
         try:
             while True:
@@ -180,7 +180,7 @@ class Motion:
 class Onvif:
     def __init__(self):
         conf = load_conf(CONF)
-        self.name = conf.get("CAM_NAME", "PiCam") or "PiCam"
+        self.name = conf.get("CAM_NAME", "OnviPi") or "OnviPi"
         self.w, self.h = output_size(conf)  # bei Hochformat getauscht
         self.fps = conf.get("FRAMERATE", "30")
         self.uuid = device_id()
@@ -235,10 +235,10 @@ class Onvif:
         return (
             "<tds:GetDeviceInformationResponse>"
             "<tds:Manufacturer>Raspberry Pi</tds:Manufacturer>"
-            "<tds:Model>PiCam (go2rtc)</tds:Model>"
+            "<tds:Model>OnviPi</tds:Model>"
             "<tds:FirmwareVersion>1.0</tds:FirmwareVersion>"
             f"<tds:SerialNumber>{self.uuid}</tds:SerialNumber>"
-            "<tds:HardwareId>PiCam-Pi4</tds:HardwareId>"
+            "<tds:HardwareId>OnviPi-Pi4</tds:HardwareId>"
             "</tds:GetDeviceInformationResponse>"
         )
 
@@ -318,7 +318,7 @@ class Onvif:
 
     def _profile(self):
         return (
-            "<trt:Profiles token=\"picam\" fixed=\"true\"><tt:Name>picam</tt:Name>"
+            "<trt:Profiles token=\"onvipi\" fixed=\"true\"><tt:Name>onvipi</tt:Name>"
             "<tt:VideoSourceConfiguration token=\"vsc0\"><tt:Name>vsc0</tt:Name>"
             "<tt:UseCount>1</tt:UseCount><tt:SourceToken>vs0</tt:SourceToken>"
             f"<tt:Bounds x=\"0\" y=\"0\" width=\"{self.w}\" height=\"{self.h}\"/>"
@@ -350,11 +350,11 @@ class Onvif:
                 f"<tt:Timeout>PT60S</tt:Timeout></trt:MediaUri></trt:{tag}Response>")
 
     def GetStreamUri(self, _):
-        return self._media_uri("GetStreamUri", f"rtsp://{self.ip()}:{RTSP_PORT}/picam")
+        return self._media_uri("GetStreamUri", f"rtsp://{self.ip()}:{RTSP_PORT}/onvipi")
 
     def GetSnapshotUri(self, _):
         return self._media_uri("GetSnapshotUri",
-                               f"http://{self.ip()}:{GO2RTC_API}/api/frame.jpeg?src=picam")
+                               f"http://{self.ip()}:{GO2RTC_API}/api/frame.jpeg?src=onvipi")
 
     def GetServiceCapabilitiesMedia(self, _):
         return ("<trt:GetServiceCapabilitiesResponse><trt:Capabilities>"
@@ -474,7 +474,7 @@ PRE_AUTH_OPS = {"GetSystemDateAndTime", "GetServices", "GetServiceCapabilities",
 
 
 def authorized(body):
-    """WS-Security UsernameToken (PasswordDigest oder PasswordText) gegen picam.conf prüfen.
+    """WS-Security UsernameToken (PasswordDigest oder PasswordText) gegen onvipi.conf prüfen.
 
     Wichtig, weil HA die hier eingegebenen Zugangsdaten auch für RTSP verwendet –
     ohne Prüfung würde die Einrichtung mit falschem Passwort "klappen", das Bild aber nicht.
@@ -512,7 +512,7 @@ def fault(reason):
 def serve(onvif):
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
-        server_version = "PiCam-ONVIF"
+        server_version = "OnviPi-ONVIF"
 
         def log_message(self, fmt, *args):
             log.debug("http: " + fmt, *args)
@@ -549,11 +549,11 @@ def serve(onvif):
             parts = urllib.parse.urlparse(self.path)
             op, fn, needs_idx = self._resolve(parts.path, body)
             if not fn:
-                log.warning("Unbekannte ONVIF-Operation auf %s: %r", parts.path, body[:120])
+                log.warning("Unknown ONVIF operation on %s: %r", parts.path, body[:120])
                 # ONVIF-Standardtext: Clients (u. a. HA) erkennen daran "optional, fehlt"
                 return self._send(fault("Optional Action Not Implemented"), 500)
             if op not in PRE_AUTH_OPS and not authorized(body):
-                log.warning("ONVIF %s von %s abgelehnt: falsche Zugangsdaten", op,
+                log.warning("ONVIF %s from %s rejected: wrong credentials", op,
                             self.client_address[0])
                 return self._send(fault("Sender not Authorized"), 400)
             try:
@@ -567,11 +567,11 @@ def serve(onvif):
             except NotImplementedError:
                 return self._send(fault("Optional Action Not Implemented"), 500)
             except Exception:
-                log.exception("Fehler bei %s", op)
+                log.exception("Error in %s", op)
                 return self._send(fault("Internal error"), 500)
 
         def do_GET(self):
-            msg = b"PiCam ONVIF\n"
+            msg = b"OnviPi ONVIF\n"
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(msg)))
@@ -580,7 +580,7 @@ def serve(onvif):
 
     http.server.ThreadingHTTPServer.allow_reuse_address = True
     srv = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    log.info("ONVIF-Server auf :%d  (XAddr %s)", PORT, onvif.xaddr("device_service"))
+    log.info("ONVIF server on :%d  (XAddr %s)", PORT, onvif.xaddr("device_service"))
     srv.serve_forever()
 
 

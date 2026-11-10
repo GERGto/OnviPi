@@ -16,11 +16,11 @@ import time
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from picamlib import CONF, device_id, ipv4_addresses, load_conf, primary_mac  # noqa: E402
+from onvipilib import CONF, device_id, ipv4_addresses, load_conf, primary_mac  # noqa: E402
 
 MCAST_GRP = "239.255.255.250"
-PORT = int(os.environ.get("PICAM_WSD_PORT", "3702"))
-log = logging.getLogger("picam-wsd")
+PORT = int(os.environ.get("ONVIPI_WSD_PORT", "3702"))
+log = logging.getLogger("onvipi-wsd")
 
 ENVELOPE = """<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:dn="http://www.onvif.org/ver10/network/wsdl" xmlns:tds="http://www.onvif.org/ver10/device/wsdl">
@@ -56,8 +56,8 @@ def tag_text(xml, name):
 class Responder:
     def __init__(self):
         conf = load_conf(CONF)
-        self.port = int(conf.get("ONVIF_PORT", "8000"))  # eigener ONVIF-Server (picam_onvif)
-        name = re.sub(r"[^A-Za-z0-9_.-]+", "_", conf.get("CAM_NAME", "PiCam")) or "PiCam"
+        self.port = int(conf.get("ONVIF_PORT", "8000"))  # eigener ONVIF-Server (onvipi_onvif)
+        name = re.sub(r"[^A-Za-z0-9_.-]+", "_", conf.get("CAM_NAME", "OnviPi")) or "OnviPi"
         scopes = [
             "onvif://www.onvif.org/Profile/Streaming",
             "onvif://www.onvif.org/type/video_encoder",
@@ -86,10 +86,10 @@ class Responder:
             mreq = struct.pack("4s4s", socket.inet_aton(MCAST_GRP), socket.inet_aton(addr))
             try:
                 self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-                log.info("Multicast aktiv auf %s", addr)
+                log.info("Multicast active on %s", addr)
             except OSError as e:
                 if e.errno != 98:  # EADDRINUSE = schon beigetreten
-                    log.debug("Join auf %s fehlgeschlagen: %s", addr, e)
+                    log.debug("Join on %s failed: %s", addr, e)
                     continue
             self.joined.add(addr)
             self.hello(addr)
@@ -115,7 +115,7 @@ class Responder:
             self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(ip))
             self.sock.sendto(msg, (MCAST_GRP, PORT))
         except OSError as e:
-            log.debug("Hello auf %s fehlgeschlagen: %s", ip, e)
+            log.debug("Hello on %s failed: %s", ip, e)
 
     @staticmethod
     def local_ip_for(peer):
@@ -145,7 +145,7 @@ class Responder:
                              relates=msg_id)
         time.sleep(random.uniform(0, 0.3))  # laut Spezifikation leicht verzögert antworten
         self.sock.sendto(reply, peer)
-        log.info("Probe von %s beantwortet (%s)", peer[0], ip)
+        log.info("Answered probe from %s (%s)", peer[0], ip)
 
     def run(self):
         last_join = 0
@@ -160,7 +160,7 @@ class Responder:
             try:
                 self.handle(data, peer)
             except Exception:  # ein kaputtes Paket darf den Dienst nicht beenden
-                log.exception("Fehler bei Paket von %s", peer)
+                log.exception("Error handling packet from %s", peer)
 
 
 if __name__ == "__main__":

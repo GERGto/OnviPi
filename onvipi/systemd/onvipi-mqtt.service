@@ -1,0 +1,12 @@
+[Unit]
+Description=OnviPi optional diagnostics for Home Assistant (MQTT discovery)
+After=network-online.target onvipi-go2rtc.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/onvipi/onvipi_mqtt.py
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

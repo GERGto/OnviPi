@@ -1,0 +1,12 @@
+[Unit]
+Description=OnviPi ONVIF discovery (WS-Discovery)
+After=network.target onvipi-go2rtc.service
+
+[Service]
+User=onvipi
+ExecStart=/usr/bin/python3 /opt/onvipi/onvipi_wsd.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

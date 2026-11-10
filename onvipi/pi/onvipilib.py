@@ -1,4 +1,4 @@
-"""Gemeinsame Hilfsfunktionen für die PiCam-Dienste."""
+"""Gemeinsame Hilfsfunktionen für die OnviPi-Dienste."""
 import os
 import re
 import shlex
@@ -6,11 +6,11 @@ import socket
 import subprocess
 import uuid
 
-CONF_DIR = os.environ.get("PICAM_CONF_DIR", "/etc/picam")
-CONF = os.path.join(CONF_DIR, "picam.conf")
+CONF_DIR = os.environ.get("ONVIPI_CONF_DIR", "/etc/onvipi")
+CONF = os.path.join(CONF_DIR, "onvipi.conf")
 MQTT_CONF = os.path.join(CONF_DIR, "mqtt.conf")
 GO2RTC_YAML = os.path.join(CONF_DIR, "go2rtc.yaml")
-STREAM_NAME = "picam"
+STREAM_NAME = "onvipi"
 
 
 def load_conf(path=CONF):
@@ -33,7 +33,7 @@ def load_conf(path=CONF):
 def save_conf(path, data, mode=0o640):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        f.write("# von PiCam verwaltet – Änderungen werden übernommen\n")
+        f.write("# managed by OnviPi – manual changes are kept\n")
         for key, value in data.items():
             f.write(f"{key}={shlex.quote(str(value))}\n")
     os.chmod(tmp, mode)
@@ -41,8 +41,8 @@ def save_conf(path, data, mode=0o640):
     os.replace(tmp, path)
 
 
-def set_group(path, group="picam"):
-    """Dienste laufen als Benutzer 'picam' und brauchen Lesezugriff."""
+def set_group(path, group="onvipi"):
+    """Dienste laufen als Benutzer 'onvipi' und brauchen Lesezugriff."""
     try:
         import shutil
         shutil.chown(path, group=group)
@@ -57,11 +57,13 @@ def device_id():
             mid = f.read().strip()
     except OSError:
         mid = socket.gethostname()
+    # "picam:" ist der historische Namensraum (PiCam) – NICHT ändern, sonst ändert sich
+    # die ONVIF-Geräte-ID und Home Assistant sieht ein neues Gerät.
     return str(uuid.uuid5(uuid.NAMESPACE_URL, "picam:" + mid))
 
 
 def slug(text):
-    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") or "picam"
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") or "onvipi"
 
 
 def primary_ip():

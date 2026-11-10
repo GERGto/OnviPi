@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Erkennt die USB-Webcam und schreibt die go2rtc-Konfiguration.
 
-  picam_camera.py --detect   Webcam suchen, Format wählen, in picam.conf speichern
-  picam_camera.py --ensure   nur neu erkennen, wenn die eingestellte Webcam fehlt/nicht passt
-  picam_camera.py --render   /etc/picam/go2rtc.yaml aus picam.conf erzeugen
+  onvipi_camera.py --detect   Webcam suchen, Format wählen, in onvipi.conf speichern
+  onvipi_camera.py --ensure   nur neu erkennen, wenn die eingestellte Webcam fehlt/nicht passt
+  onvipi_camera.py --render   /etc/onvipi/go2rtc.yaml aus onvipi.conf erzeugen
 """
 import argparse
 import glob
@@ -14,7 +14,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from picamlib import CONF, GO2RTC_YAML, STREAM_NAME, load_conf, save_conf, set_group  # noqa: E402
+from onvipilib import CONF, GO2RTC_YAML, STREAM_NAME, load_conf, save_conf, set_group  # noqa: E402
 
 FOURCC = {"MJPG": "mjpeg", "YUYV": "yuyv422", "H264": "h264"}
 PREFERRED_SIZES = ["1280x720", "1920x1080", "1024x768", "800x600", "640x480"]
@@ -198,7 +198,7 @@ def render(conf):
     # JSON ist gültiges YAML – so gibt es keine Quoting-Probleme mit Passwörtern
     tmp = GO2RTC_YAML + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        f.write("# Automatisch erzeugt aus picam.conf – bitte dort ändern\n")
+        f.write("# Generated from onvipi.conf – please make changes there\n")
         json.dump(cfg, f, indent=2)
         f.write("\n")
     os.chmod(tmp, 0o640)
@@ -216,18 +216,18 @@ def main():
     conf = load_conf(CONF)
 
     if args.ensure and not args.detect and needs_detect(conf):
-        print(f"Webcam {conf.get('VIDEO_DEVICE') or '?'} nicht verfügbar – suche neu")
+        print(f"Webcam {conf.get('VIDEO_DEVICE') or '?'} not available – detecting again")
         args.detect = True
     if args.detect:
         dev, fmt, size, fps = detect()
         if not dev:
-            print("WARNUNG: keine USB-Webcam gefunden – bisherige Werte bleiben gesetzt.")
+            print("WARNING: no USB webcam found – keeping the current settings.")
         else:
-            info = f"Webcam: {dev}  Format: {fmt}  Auflösung: {size}"
+            info = f"Webcam: {dev}  format: {fmt}  resolution: {size}"
             conf.update(VIDEO_DEVICE=dev, VIDEO_FORMAT=fmt, VIDEO_SIZE=size)
             if fps:
                 conf["FRAMERATE"] = str(fps)
-                info += f"  Framerate: {fps}"
+                info += f"  frame rate: {fps}"
             print(info)
             save_conf(CONF, conf)
     if args.render:

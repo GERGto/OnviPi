@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Meldet die PiCam per MQTT-Discovery automatisch in Home Assistant an.
+"""Meldet die OnviPi per MQTT-Discovery automatisch in Home Assistant an.
 
 Legt in HA ein Gerät an mit:
   * Kamera "Schnappschuss" (Standbild alle SNAPSHOT_INTERVAL Sekunden, 0 = aus)
   * Diagnose: CPU-Temperatur, WLAN-Signal, IP-Adresse, ONVIF-Adresse
   * Taste "Neustart"
-Ohne /etc/picam/mqtt.conf wartet der Dienst einfach, bis Zugangsdaten da sind.
+Ohne /etc/onvipi/mqtt.conf wartet der Dienst einfach, bis Zugangsdaten da sind.
 """
 import json
 import logging
@@ -16,9 +16,9 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from picamlib import CONF, MQTT_CONF, STREAM_NAME, device_id, load_conf, primary_ip  # noqa: E402
+from onvipilib import CONF, MQTT_CONF, STREAM_NAME, device_id, load_conf, primary_ip  # noqa: E402
 
-log = logging.getLogger("picam-mqtt")
+log = logging.getLogger("onvipi-mqtt")
 DISCOVERY = "homeassistant"
 STATS_INTERVAL = 60
 
@@ -53,7 +53,7 @@ def snapshot():
         with urllib.request.urlopen(url, timeout=15) as r:
             return r.read()
     except OSError as e:
-        log.warning("Schnappschuss fehlgeschlagen: %s", e)
+        log.warning("Snapshot failed: %s", e)
         return None
 
 
@@ -61,8 +61,9 @@ class Announcer:
     def __init__(self, conf, mqtt_conf):
         import paho.mqtt.client as mqtt
         self.conf, self.mqtt_conf = conf, mqtt_conf
+        # "picam_" = historisches Präfix (PiCam) – NICHT ändern, sonst neue Entitäten in HA
         self.uid = "picam_" + device_id().replace("-", "")[:12]
-        self.base = f"picam/{self.uid}"
+        self.base = f"onvipi/{self.uid}"
         self.interval = int(mqtt_conf.get("SNAPSHOT_INTERVAL", "30") or 0)
         try:  # paho-mqtt 2.x (Trixie) und 1.x (Bookworm)
             self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=self.uid)
@@ -78,9 +79,9 @@ class Announcer:
     def device(self):
         dev = {
             "identifiers": [self.uid],
-            "name": self.conf.get("CAM_NAME", "PiCam"),
+            "name": self.conf.get("CAM_NAME", "OnviPi"),
             "manufacturer": "Raspberry Pi",
-            "model": "Pi 4 + USB-Webcam (go2rtc)",
+            "model": "OnviPi (Raspberry Pi + USB webcam)",
         }
         ip = primary_ip()
         if ip:
@@ -93,28 +94,28 @@ class Announcer:
         entities = []
         if self.interval > 0:
             entities.append(("camera", "snapshot", {
-                "name": "Schnappschuss", "topic": f"{self.base}/snapshot"}))
+                "name": "Snapshot", "topic": f"{self.base}/snapshot"}))
         entities += [
             ("sensor", "cpu_temp", {
-                "name": "CPU-Temperatur", "state_topic": f"{self.base}/stats",
+                "name": "CPU temperature", "state_topic": f"{self.base}/stats",
                 "value_template": "{{ value_json.cpu_temp }}", "unit_of_measurement": "°C",
                 "device_class": "temperature", "state_class": "measurement",
                 "entity_category": "diagnostic"}),
             ("sensor", "wifi_signal", {
-                "name": "WLAN-Signal", "state_topic": f"{self.base}/stats",
+                "name": "Wi-Fi signal", "state_topic": f"{self.base}/stats",
                 "value_template": "{{ value_json.wifi_signal }}", "unit_of_measurement": "dBm",
                 "device_class": "signal_strength", "state_class": "measurement",
                 "entity_category": "diagnostic"}),
             ("sensor", "ip", {
-                "name": "IP-Adresse", "state_topic": f"{self.base}/stats",
+                "name": "IP address", "state_topic": f"{self.base}/stats",
                 "value_template": "{{ value_json.ip }}", "entity_category": "diagnostic",
                 "icon": "mdi:ip-network"}),
             ("sensor", "onvif", {
-                "name": "ONVIF-Adresse", "state_topic": f"{self.base}/stats",
+                "name": "ONVIF address", "state_topic": f"{self.base}/stats",
                 "value_template": "{{ value_json.onvif }}", "entity_category": "diagnostic",
                 "icon": "mdi:cctv"}),
             ("button", "reboot", {
-                "name": "Neustart", "command_topic": f"{self.base}/cmd",
+                "name": "Restart", "command_topic": f"{self.base}/cmd",
                 "payload_press": "reboot", "device_class": "restart",
                 "entity_category": "config"}),
         ]
@@ -125,11 +126,11 @@ class Announcer:
         if self.interval <= 0:  # Kamera-Entität entfernen, falls abgeschaltet
             self.client.publish(f"{DISCOVERY}/camera/{self.uid}/snapshot/config", "", retain=True)
         self.client.publish(f"{self.base}/status", "online", retain=True)
-        log.info("Discovery an Home Assistant gesendet (%s)", self.uid)
+        log.info("Discovery sent to Home Assistant (%s)", self.uid)
 
     def on_connect(self, client, userdata, flags, rc, properties=None):
         if getattr(rc, "is_failure", rc != 0):
-            log.error("MQTT-Anmeldung abgelehnt: %s", rc)
+            log.error("MQTT login rejected: %s", rc)
             return
         client.subscribe(f"{self.base}/cmd")
         client.subscribe(f"{DISCOVERY}/status")
@@ -141,7 +142,7 @@ class Announcer:
         if msg.topic == f"{DISCOVERY}/status" and payload == "online":
             self.publish_discovery()  # HA wurde neu gestartet
         elif msg.topic == f"{self.base}/cmd" and payload == "reboot":
-            log.info("Neustart über Home Assistant angefordert")
+            log.info("Restart requested via Home Assistant")
             client.publish(f"{self.base}/status", "offline", retain=True)
             subprocess.Popen(["systemctl", "reboot"])
 
@@ -160,7 +161,7 @@ class Announcer:
                 self.client.connect(host, port, keepalive=60)
                 break
             except OSError as e:
-                log.warning("MQTT %s:%s nicht erreichbar (%s) – neuer Versuch in 30 s", host, port, e)
+                log.warning("MQTT %s:%s unreachable (%s) – retrying in 30 s", host, port, e)
                 time.sleep(30)
         self.client.loop_start()
         last_stats = last_snap = 0

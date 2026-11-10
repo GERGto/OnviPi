@@ -1,0 +1,14 @@
+[Unit]
+Description=OnviPi ONVIF server (device, media, motion events)
+After=network-online.target onvipi-go2rtc.service
+Wants=network-online.target
+
+[Service]
+User=onvipi
+SupplementaryGroups=video
+ExecStart=/usr/bin/python3 /opt/onvipi/onvipi_onvif.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

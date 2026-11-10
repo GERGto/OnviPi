@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Systemeinstellungen für den Einrichtungs-Assistenten (läuft als root in picam-wifi).
+"""Systemeinstellungen für den Einrichtungs-Assistenten (läuft als root in onvipi-wifi).
 
 Benutzerkonto + Passwort, SSH, WLAN-Land, Zeitzone und Hostname. Damit lässt sich ein
-frisch geflashtes PiCam-Image komplett über den Hotspot einrichten – ohne Einstellungen
+frisch geflashtes OnviPi-Image komplett über den Hotspot einrichten – ohne Einstellungen
 im Raspberry Pi Imager und ohne Tastatur/Bildschirm.
 
 Sicherheitsregel: Ein Benutzerkonto kann der (offene) Assistent nur anlegen, solange es
@@ -19,10 +19,10 @@ USERCONF = "/usr/lib/userconf-pi/userconf"   # offizielles Werkzeug von Raspberr
 USER_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 LOGIN_GROUPS = ("sudo", "adm", "video", "audio", "plugdev", "users", "netdev", "dialout",
                 "gpio", "i2c", "spi")
-FALLBACK_COUNTRIES = [("DE", "Deutschland"), ("AT", "Österreich"), ("CH", "Schweiz"),
-                      ("LU", "Luxemburg"), ("NL", "Niederlande"), ("BE", "Belgien"),
-                      ("FR", "Frankreich"), ("IT", "Italien"), ("PL", "Polen"),
-                      ("GB", "Vereinigtes Königreich"), ("US", "USA")]
+FALLBACK_COUNTRIES = [("DE", "Germany"), ("AT", "Austria"), ("CH", "Switzerland"),
+                      ("LU", "Luxembourg"), ("NL", "Netherlands"), ("BE", "Belgium"),
+                      ("FR", "France"), ("IT", "Italy"), ("PL", "Poland"),
+                      ("GB", "United Kingdom"), ("US", "United States")]
 
 
 def _run(cmd, input=None, timeout=60):
@@ -76,7 +76,7 @@ def _rename_user(old, new, password):
                 ["groupmod", "-n", new, old]):
         r = _run(cmd)
         if r.returncode != 0 and cmd[0] == "usermod":
-            return f"Benutzer konnte nicht angelegt werden: {r.stderr.strip()}"
+            return f"Could not create the user: {r.stderr.strip()}"
     sudoers = "/etc/sudoers.d/010_pi-nopasswd"
     if os.path.exists(sudoers):
         with open(sudoers, encoding="utf-8") as f:
@@ -89,32 +89,32 @@ def _rename_user(old, new, password):
 def create_login(name, password):
     """Legt das Anmeldekonto an (bzw. benennt 'pi' um). Gibt eine Fehlermeldung oder None zurück."""
     if configured():
-        return "Es ist bereits ein Benutzer eingerichtet."
+        return "A user has already been set up."
     if not USER_RE.fullmatch(name):
-        return ("Benutzername: Kleinbuchstaben, Ziffern, - und _, beginnt mit einem Buchstaben "
-                "(max. 32 Zeichen).")
+        return ("Username: lowercase letters, digits, - and _, starting with a letter "
+                "(max. 32 characters).")
     if not 8 <= len(password) <= 128 or any(ord(c) < 32 for c in password):
-        return "Das Passwort muss 8 bis 128 Zeichen lang sein."
+        return "The password must be 8 to 128 characters long."
     uids = {p[0]: int(p[2]) for p in _passwd() if p[2].isdigit()}
     if name in uids and not 1000 <= uids[name] < 60000:
-        return f"„{name}“ ist ein Systemkonto – bitte einen anderen Namen wählen."
+        return f"“{name}” is a system account – please choose another name."
     first = next((u for u, uid in uids.items() if uid == 1000), None)
     if first and first != name:
         if name in uids:
-            return f"Der Name „{name}“ ist schon vergeben."
+            return f"The name “{name}” is already taken."
         err = _rename_user(first, name, password)
         if err:
             return err
     elif name not in uids:
         r = _run(["useradd", "-m", "-s", "/bin/bash", name])
         if r.returncode != 0:
-            return f"Benutzer konnte nicht angelegt werden: {r.stderr.strip()}"
+            return f"Could not create the user: {r.stderr.strip()}"
     groups = [g for g in LOGIN_GROUPS if _run(["getent", "group", g]).returncode == 0]
     if groups:
         _run(["usermod", "-aG", ",".join(groups), name])
     r = _run(["chpasswd"], input=f"{name}:{password}\n")
     if r.returncode != 0:
-        return f"Passwort konnte nicht gesetzt werden: {r.stderr.strip()}"
+        return f"Could not set the password: {r.stderr.strip()}"
     return None
 
 
@@ -175,12 +175,12 @@ def set_timezone(tz):
 
 # --------------------------------------------------------------------------- Hostname
 def hostname_for(name):
-    """'Garten Süd' -> 'picam-garten-sud'. None beim Standardnamen (Hostname bleibt dann)."""
+    """'Garten Süd' -> 'onvipi-garten-sud'. None beim Standardnamen (Hostname bleibt dann)."""
     s = unicodedata.normalize("NFKD", name.replace("ß", "ss")).encode("ascii", "ignore").decode()
     s = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
-    if not s or s == "picam":
+    if not s or s == "onvipi":
         return None
-    return ("picam-" + s)[:63].rstrip("-")
+    return ("onvipi-" + s)[:63].rstrip("-")
 
 
 def set_hostname(new):
