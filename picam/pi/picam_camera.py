@@ -2,6 +2,7 @@
 """Erkennt die USB-Webcam und schreibt die go2rtc-Konfiguration.
 
   picam_camera.py --detect   Webcam suchen, Format wählen, in picam.conf speichern
+  picam_camera.py --ensure   nur neu erkennen, wenn die eingestellte Webcam fehlt/nicht passt
   picam_camera.py --render   /etc/picam/go2rtc.yaml aus picam.conf erzeugen
 """
 import argparse
@@ -78,16 +79,21 @@ def camera_label(dev):
     return re.sub(r"\s+", " ", name) or dev
 
 
+def formats_of(dev):
+    """{format: {größe: [fps, …]}} eines Geräts, {} bei Fehler."""
+    try:
+        out = subprocess.run(["v4l2-ctl", "--device", dev, "--list-formats-ext"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    return parse_formats(out)
+
+
 def list_cameras():
     """Für die Geräteauswahl im Portal: [{dev, label, formats}] je erkannter USB-Kamera."""
     cams = []
     for dev in find_devices():
-        try:
-            out = subprocess.run(["v4l2-ctl", "--device", dev, "--list-formats-ext"],
-                                 capture_output=True, text=True, timeout=10).stdout
-        except (OSError, subprocess.SubprocessError):
-            continue
-        formats = parse_formats(out)
+        formats = formats_of(dev)
         if formats:
             cams.append({"dev": dev, "label": camera_label(dev), "formats": formats})
     return cams
@@ -95,18 +101,24 @@ def list_cameras():
 
 def detect():
     for dev in find_devices():
-        try:
-            out = subprocess.run(["v4l2-ctl", "--device", dev, "--list-formats-ext"],
-                                 capture_output=True, text=True, timeout=10).stdout
-        except (OSError, subprocess.SubprocessError):
-            continue
-        formats = parse_formats(out)
+        formats = formats_of(dev)
         fmt, size = choose(formats)
         if fmt:
             fps_list = formats[fmt].get(size) or []
             fps = min(fps_list[0], 30) if fps_list else None  # höchste native fps, gedeckelt
             return dev, fmt, size, fps
     return None, None, None, None
+
+
+def needs_detect(conf):
+    """Eingestellte Webcam fehlt (z. B. getauscht) oder kann Format/Auflösung nicht mehr."""
+    dev = conf.get("VIDEO_DEVICE") or ""
+    if not os.path.exists(dev):
+        return True
+    formats = formats_of(dev)
+    if not formats:
+        return False  # Gerät antwortet gerade nicht – nichts überschreiben
+    return conf.get("VIDEO_SIZE") not in formats.get(conf.get("VIDEO_FORMAT"), {})
 
 
 ROTATIONS = (0, 90, 180, 270)
@@ -198,14 +210,18 @@ def render(conf):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--detect", action="store_true")
+    ap.add_argument("--ensure", action="store_true")
     ap.add_argument("--render", action="store_true")
     args = ap.parse_args()
     conf = load_conf(CONF)
 
+    if args.ensure and not args.detect and needs_detect(conf):
+        print(f"Webcam {conf.get('VIDEO_DEVICE') or '?'} nicht verfügbar – suche neu")
+        args.detect = True
     if args.detect:
         dev, fmt, size, fps = detect()
         if not dev:
-            print("WARNUNG: keine USB-Webcam gefunden – Standardwerte bleiben gesetzt.")
+            print("WARNUNG: keine USB-Webcam gefunden – bisherige Werte bleiben gesetzt.")
         else:
             info = f"Webcam: {dev}  Format: {fmt}  Auflösung: {size}"
             conf.update(VIDEO_DEVICE=dev, VIDEO_FORMAT=fmt, VIDEO_SIZE=size)

@@ -4,8 +4,10 @@
 Ablauf:
   * Beim Start bis zu BOOT_GRACE Sekunden auf eine Netzwerkverbindung warten.
   * Keine Verbindung -> Hotspot "AP_SSID" mit Captive Portal auf http://10.42.0.1
+  * Gibt es noch keinen Benutzer mit Passwort (frisch geflashtes Image), startet der
+    Hotspot sofort – auch wenn ein LAN-Kabel steckt – und bleibt, bis das erledigt ist.
   * Im Portal (Schritt-für-Schritt-Wizard): Kameraname + USB-Gerät wählen, Vorschau
-    prüfen, dann WLAN auswählen + Passwort.
+    prüfen, Zugang (Benutzer, Passwort, SSH, WLAN-Land, Zeitzone), dann WLAN + Passwort.
   * Verbindung klappt -> Hotspot aus. Klappt nicht -> Hotspot wieder an, Fehler im Portal.
   * Ist im Hotspot-Modus niemand verbunden, wird alle RETRY_INTERVAL Sekunden
     erneut das gespeicherte WLAN versucht (z. B. nach Stromausfall, wenn der Router
@@ -42,6 +44,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from picamlib import CONF, load_conf, primary_ip, save_conf  # noqa: E402
 from picam_camera import ROTATIONS, list_cameras, rotation  # noqa: E402
+import picam_system as system  # noqa: E402
 
 log = logging.getLogger("picam-wifi")
 
@@ -60,7 +63,7 @@ CONNECT_TIMEOUT = 45
 FMT_LABEL = {"mjpeg": "MJPEG", "h264": "H.264", "yuyv422": "YUYV (unkomprimiert)"}
 ROTATE_LABEL = {0: "Normal", 90: "Hochformat (90° rechts)", 180: "Kopfüber (180°)",
                 270: "Hochformat (90° links)"}
-STEP_NAMES = ["Start", "Kamera", "Vorschau", "WLAN"]
+STEP_NAMES = ["Start", "Kamera", "Vorschau", "Zugang", "WLAN"]
 
 
 # --------------------------------------------------------------------------- nmcli
@@ -271,6 +274,7 @@ class Portal:
         self.pending = None
         self.server = None
         self.ap = False          # Hotspot aktiv -> Hotspot-Clients bekommen den Assistenten
+        self.finished = False    # Assistent ohne WLAN abgeschlossen ("Pi bleibt am Kabel")
         self.fails = {}          # IP -> (Fehlversuche, Zeitpunkt des letzten)
 
     # -- Anmeldung (Einstellungsseite)
@@ -314,7 +318,8 @@ class Portal:
         name = html.escape(load_conf(CONF).get("CAM_NAME", "PiCam"))
         body = (f"<div class=card><div class=hero>📷</div><h1>Kamera einrichten</h1>"
                 f"<p class=sub>Dieser Assistent richtet „{name}“ für Home Assistant ein: "
-                f"Name vergeben, USB-Kamera wählen, kurz prüfen und ins WLAN bringen.</p>"
+                f"Name vergeben, USB-Kamera wählen, kurz prüfen, Zugang zum Pi festlegen "
+                f"und ins WLAN bringen.</p>"
                 f"<a class=btn href=/camera>Los geht’s →</a></div>")
         return page("Willkommen", self._wrap(1, body))
 
@@ -377,8 +382,51 @@ class Portal:
                 f"onclick=\"document.getElementById('shot').src='/snapshot.jpg?x='+Date.now()\">"
                 f"🔄 Aktualisieren</button></div>"
                 f"<div class=row><a class='btn sec' href=/camera>← Zurück</a>"
-                f"<a class=btn href=/wifi>Passt →</a></div>")
+                f"<a class=btn href=/system>Passt →</a></div>")
         return page("Vorschau", self._wrap(3, body))
+
+    def system(self, error=""):
+        e = html.escape
+        conf = load_conf(CONF)
+        err = f"<div class=err>{e(error)}</div>" if error else ""
+        cur_c = conf.get("WIFI_COUNTRY", "DE")
+        csel = "".join(f"<option value={e(c)}{' selected' if c == cur_c else ''}>{e(n)} ({e(c)})"
+                       f"</option>" for c, n in system.countries())
+        cur_tz = system.current_timezone()
+        tsel = "".join(f"<option{' selected' if z == cur_tz else ''}>{e(z)}</option>"
+                       for z in system.timezones())
+        if system.configured():
+            users = ", ".join(system.users_with_password() or []) or "–"
+            account = (f"<div class=card><h2>🔑 Anmeldung am Pi</h2><p class=note>Der Benutzer "
+                       f"<b>{e(users)}</b> ist bereits eingerichtet. Aus Sicherheitsgründen lässt "
+                       f"er sich hier nicht mehr ändern (nur per SSH). SSH schaltest du in der "
+                       f"Einstellungsseite um.</p></div>")
+        else:
+            account = ("<div class=card><h2>🔑 Anmeldung am Pi</h2>"
+                       "<p class=note>Mit diesem Benutzer meldest du dich per SSH oder mit "
+                       "Tastatur am Pi an. Das Kamera-Passwort für Home Assistant ist ein anderes "
+                       "und wird automatisch erzeugt.</p>"
+                       "<label for=user>Benutzername</label>"
+                       "<input name=user id=user maxlength=32 autocapitalize=off autocorrect=off "
+                       "autocomplete=username pattern='[a-z][a-z0-9_\\-]*' required>"
+                       "<small>Kleinbuchstaben, Ziffern, - und _</small>"
+                       "<label for=pw1>Passwort</label>"
+                       "<input type=password name=pw1 id=pw1 autocomplete=new-password "
+                       "minlength=8 maxlength=128 required>"
+                       "<label for=pw2>Passwort wiederholen</label>"
+                       "<input type=password name=pw2 id=pw2 autocomplete=new-password "
+                       "minlength=8 maxlength=128 required>"
+                       "<label class=check><input type=checkbox name=ssh value=1 checked> "
+                       "SSH-Zugang aktivieren</label></div>")
+        body = (f"{err}<form method=post action=/system>{account}"
+                f"<div class=card><h2>🌍 Region</h2>"
+                f"<label for=country>WLAN-Land</label><select name=country id=country>{csel}</select>"
+                f"<small>Legt die erlaubten WLAN-Kanäle fest.</small>"
+                f"<label for=tz>Zeitzone</label><select name=tz id=tz>{tsel}</select>"
+                f"<small>Für Datum und Uhrzeit im Bild.</small></div>"
+                f"<div class=row><a class='btn sec' href=/preview>← Zurück</a>"
+                f"<button>Weiter →</button></div></form>")
+        return page("Zugang", self._wrap(4, body))
 
     def wifi(self):
         e = html.escape
@@ -397,10 +445,10 @@ class Portal:
                 f"<label for=psk>WLAN-Passwort</label>"
                 f"<input type=password name=psk id=psk autocomplete=off minlength=8 maxlength=63>"
                 f"<small>Leer lassen bei offenem WLAN.</small></div>"
-                f"<div class=row><a class='btn sec' href=/preview>← Zurück</a>"
+                f"<div class=row><a class='btn sec' href=/system>← Zurück</a>"
                 f"<button>Verbinden →</button></div></form>"
                 f"<p class=center><a href=/done>WLAN überspringen (Pi bleibt am Kabel)</a></p>")
-        return page("WLAN", self._wrap(4, body))
+        return page("WLAN", self._wrap(5, body))
 
     def connecting(self, ssid):
         e = html.escape
@@ -415,7 +463,7 @@ class Portal:
                 f"Passwort falsch – einfach erneut verbinden.</p>"
                 f"<p class=note>📸 Mach am besten jetzt ein Bildschirmfoto der Zugangsdaten unten.</p>"
                 f"</div>{ha_card(conf)}")
-        return page("Verbinde …", self._wrap(4, body))
+        return page("Verbinde …", self._wrap(5, body))
 
     def done(self):
         e = html.escape
@@ -424,7 +472,7 @@ class Portal:
         body = (f"<div class=card><div class=hero>✅</div><h1>Fertig</h1>"
                 f"<p>„{name}“ ist eingerichtet. Du bleibst über das Kabel verbunden.</p>"
                 f"<p><b>Einstellungen:</b> http://{host}.local</p></div>{ha_card(conf)}")
-        return page("Fertig", self._wrap(4, body))
+        return page("Fertig", self._wrap(5, body))
 
     # -- Einstellungsseite (Normalbetrieb, mit Anmeldung)
     MESSAGES = {
@@ -433,6 +481,7 @@ class Portal:
         "password": "Passwort geändert. Bitte in Home Assistant bei der ONVIF-Kamera "
                     "„Neu konfigurieren“ und das neue Passwort eintragen.",
         "restart": "Dienste werden neu gestartet …",
+        "ssh": "SSH-Einstellung gespeichert.",
     }
 
     def settings(self, msg="", error=""):
@@ -486,12 +535,21 @@ class Portal:
                f"<form method=post action=/settings/restart><div class=row>"
                f"<button class=sec>Dienste neu starten</button></div></form></div>")
 
+        ssh_on = " checked" if system.ssh_enabled() else ""
+        ssh = (f"<form method=post action=/settings/ssh><div class=card><h2>🔑 SSH</h2>"
+               f"<label class=check><input type=checkbox name=enable value=1{ssh_on}> "
+               f"SSH-Zugang aktiv</label>"
+               f"<p><small>Anmeldung mit dem Benutzer aus der Einrichtung "
+               f"({e(', '.join(system.users_with_password() or []) or '–')}), "
+               f"nicht mit dem Kamera-Passwort.</small></p>"
+               f"<div class=row><button>Speichern</button></div></div></form>")
+
         body = (f"<h1>{e(conf.get('CAM_NAME', 'PiCam'))}</h1><p class=sub>PiCam-Einstellungen</p>"
                 f"{note}<div class=card><img id=shot class=shot src=/snapshot.jpg alt='Vorschau'>"
                 f"<button type=button class='btn sec' "
                 f"onclick=\"document.getElementById('shot').src='/snapshot.jpg?x='+Date.now()\">"
                 f"🔄 Aktualisieren</button></div>"
-                f"{ha_card(conf, ip or None)}{cam}{motion}{pw}{net}")
+                f"{ha_card(conf, ip or None)}{cam}{motion}{pw}{net}{ssh}")
         return page(conf.get("CAM_NAME", "PiCam"), body)
 
     def apply_motion(self, form):
@@ -519,8 +577,43 @@ class Portal:
         run(["systemctl", "restart", "go2rtc.service", "picam-onvif.service"], timeout=45)
         return None
 
+    def apply_ssh(self, form):
+        if not system.set_ssh(bool(form.get("enable"))):
+            return "SSH konnte nicht umgestellt werden (siehe journalctl -u picam-wifi)."
+        log.info("SSH über die Weboberfläche %s", "aktiviert" if form.get("enable") else "deaktiviert")
+        return None
+
+    def apply_system(self, form):
+        g = lambda k: (form.get(k, [""])[0]).strip()  # noqa: E731
+        country, tz = g("country").upper(), g("tz")
+        if country not in {c for c, _ in system.countries()}:
+            return "Bitte ein WLAN-Land auswählen."
+        if tz not in system.timezones():
+            return "Bitte eine Zeitzone auswählen."
+        if not system.configured():
+            user = g("user").lower()
+            pw1, pw2 = form.get("pw1", [""])[0], form.get("pw2", [""])[0]
+            if pw1 != pw2:
+                return "Die Passwörter stimmen nicht überein."
+            err = system.create_login(user, pw1)
+            if err:
+                return err
+            system.set_ssh(bool(form.get("ssh")))
+            log.info("Benutzer '%s' eingerichtet, SSH %s", user, "an" if form.get("ssh") else "aus")
+        conf = load_conf(CONF)
+        if country != conf.get("WIFI_COUNTRY"):
+            system.set_country(country)
+            conf["WIFI_COUNTRY"] = country
+            save_conf(CONF, conf)
+            log.info("WLAN-Land: %s", country)
+        if tz != system.current_timezone():
+            system.set_timezone(tz)
+            log.info("Zeitzone: %s", tz)
+            run(["systemctl", "restart", "go2rtc.service"], timeout=45)  # Uhrzeit im Bild
+        return None
+
     # -- Verarbeitung
-    def apply_camera(self, form):
+    def apply_camera(self, form, wizard=False):
         g = lambda k: (form.get(k, [""])[0]).strip()  # noqa: E731
         name = re.sub(r"[\x00-\x1f'\"\\`$]", "", g("name"))[:48].strip() or "PiCam"
         dev, fmt, size, fps = g("device"), g("format"), g("size"), g("fps")
@@ -538,6 +631,12 @@ class Portal:
             fpsi = allowed[0]
         rot = rotation({"ROTATE": g("rotate")})
         conf = load_conf(CONF)
+        if wizard and conf.get("HOSTNAME_AUTO") == "1":
+            # Hostname folgt dem Namen, solange er automatisch vergeben wurde (Image/Installer)
+            new_host = system.hostname_for(name)
+            if new_host:
+                system.set_hostname(new_host)
+                conf["HOSTNAME"] = new_host
         conf.update(CAM_NAME=name, VIDEO_DEVICE=dev, VIDEO_FORMAT=fmt,
                     VIDEO_SIZE=size, FRAMERATE=str(fpsi), ROTATE=str(rot),
                     OVERLAY_TIME="1" if form.get("overlay") else "0")
@@ -644,9 +743,14 @@ class Portal:
                 if path == "/snapshot.jpg":
                     img = portal.snapshot()
                     return self.send(200, img, "image/jpeg") if img else self.send(503)
+                if path == "/system":
+                    return self.page_out(portal.system())
+                if path in ("/wifi", "/done") and not system.configured():
+                    return self.send(302, headers={"Location": "/system"})
                 if path == "/wifi":
                     return self.page_out(portal.wifi())
                 if path == "/done":
+                    portal.finished = True
                     return self.page_out(portal.done())
                 self.send(302, headers={"Location": "/"})
 
@@ -675,6 +779,8 @@ class Portal:
                     err = portal.apply_motion(form)
                 elif path == "/settings/password":
                     err = portal.apply_password(form)
+                elif path == "/settings/ssh":
+                    err = portal.apply_ssh(form)
                 elif path == "/settings/restart":
                     subprocess.Popen(["systemctl", "restart", "go2rtc.service",
                                       "picam-onvif.service", "picam-wsd.service",
@@ -692,10 +798,17 @@ class Portal:
                     return self.settings_post()
                 path = self.path.split("?")[0]
                 if path == "/camera":
-                    err = portal.apply_camera(self.read_form())
+                    err = portal.apply_camera(self.read_form(), wizard=True)
                     if err:
                         return self.page_out(portal.camera(err))
                     return self.send(303, headers={"Location": "/preview"})
+                if path == "/system":
+                    err = portal.apply_system(self.read_form())
+                    if err:
+                        return self.page_out(portal.system(err))
+                    return self.send(303, headers={"Location": "/wifi"})
+                if path == "/connect" and not system.configured():
+                    return self.send(303, headers={"Location": "/system"})
                 if path == "/connect":
                     err = portal.submit_wifi(self.read_form())
                     if err:
@@ -748,11 +861,19 @@ def ap_mode(net, portal):
                 net.hotspot_up()
                 last_retry = time.time()
 
+            if portal.finished:
+                portal.finished = False
+                if net.online():  # "WLAN überspringen" am Kabel -> Hotspot aus
+                    time.sleep(2)
+                    net.hotspot_down()
+                    log.info("Einrichtung abgeschlossen – Pi bleibt am Kabel")
+                    return
+
             if not net.hotspot_active():
                 net.hotspot_up()
 
             if (net.saved_wifi() and time.time() - last_retry > RETRY_INTERVAL
-                    and not net.clients_connected()):
+                    and system.configured() and not net.clients_connected()):
                 log.info("Niemand im Hotspot – versuche gespeichertes WLAN erneut")
                 net.hotspot_down()
                 if net.wait_online(CONNECT_TIMEOUT):
@@ -778,9 +899,17 @@ def service():
 
     net.hotspot_down()  # Reste eines früheren Laufs
     portal.start()      # Einstellungsseite; im Hotspot-Modus zusätzlich der Assistent
-    log.info("Warte bis zu %ds auf Netzwerk …", BOOT_GRACE)
-    offline_since = None if net.wait_online(BOOT_GRACE) else time.time() - OFFLINE_GRACE
+    offline_since = None
+    if system.configured():
+        log.info("Warte bis zu %ds auf Netzwerk …", BOOT_GRACE)
+        offline_since = None if net.wait_online(BOOT_GRACE) else time.time() - OFFLINE_GRACE
     while True:
+        if not system.configured():
+            # Frisches Image: ohne Benutzer kommt niemand an den Pi -> Assistent erzwingen
+            log.info("Noch kein Benutzer eingerichtet – starte Einrichtungs-Hotspot")
+            ap_mode(net, portal)
+            offline_since = None
+            continue
         if net.online():
             offline_since = None
             time.sleep(15)
@@ -828,6 +957,7 @@ def main():
         print("Online:", net.online())
         print("Hotspot aktiv:", net.hotspot_active())
         print("Gespeicherte WLANs:", ", ".join(net.saved_wifi()) or "–")
+        print("Benutzer eingerichtet:", ", ".join(system.users_with_password() or []) or "nein")
     elif args.command == "reset":
         for name in net.saved_wifi():
             nmcli("con", "delete", name)

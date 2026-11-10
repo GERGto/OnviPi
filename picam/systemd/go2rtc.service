@@ -5,7 +5,7 @@ After=network.target
 [Service]
 User=picam
 SupplementaryGroups=video
-ExecStartPre=+/usr/bin/python3 /opt/picam/picam_camera.py --render
+ExecStartPre=+/usr/bin/python3 /opt/picam/picam_camera.py --ensure --render
 ExecStart=/usr/local/bin/go2rtc -config /etc/picam/go2rtc.yaml
 Restart=always
 RestartSec=5
