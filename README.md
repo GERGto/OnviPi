@@ -25,26 +25,6 @@ local, no cloud, no subscription.
 - 💿 **OnviPiOS:** ready-to-flash image based on Raspberry Pi OS Lite
 - 🔒 **Everything stays on your network,** credentials are stored only on the Pi
 
-## Screenshots
-
-Set up from your phone via the hotspot – step by step:
-
-<table>
-  <tr>
-    <td align="center" valign="top" width="25%"><img src="docs/screenshots/wizard-2-camera.png" alt="Wizard: choose camera" width="200"><br><sub><b>Camera</b><br>name, device, format, resolution</sub></td>
-    <td align="center" valign="top" width="25%"><img src="docs/screenshots/wizard-3-preview.png" alt="Wizard: preview" width="200"><br><sub><b>Preview</b><br>current picture (test pattern here)</sub></td>
-    <td align="center" valign="top" width="25%"><img src="docs/screenshots/wizard-4-access.png" alt="Wizard: access to the Pi" width="200"><br><sub><b>Access</b><br>user, password, SSH, region</sub></td>
-    <td align="center" valign="top" width="25%"><img src="docs/screenshots/wizard-5-wifi.png" alt="Wizard: Wi-Fi" width="200"><br><sub><b>Wi-Fi</b><br>pick a network or stay on Ethernet</sub></td>
-  </tr>
-  <tr>
-    <td align="center" valign="top"><img src="docs/screenshots/wizard-1-start.png" alt="Wizard: start" width="200"><br><sub><b>Start</b></sub></td>
-    <td align="center" valign="top"><img src="docs/screenshots/wizard-6-done.png" alt="Wizard: Home Assistant credentials" width="200"><br><sub><b>Done</b><br>credentials for Home Assistant</sub></td>
-    <td align="center" valign="top" colspan="2"><img src="docs/screenshots/settings.png" alt="Settings page" width="200"><br><sub><b>Settings page</b> during normal operation<br>(<code>http://onvipi-&lt;name&gt;.local</code>)</sub></td>
-  </tr>
-</table>
-
-<sub>All data shown in the screenshots are examples.</sub>
-
 ## Contents
 
 1. [Requirements](#1-requirements)
@@ -106,7 +86,7 @@ Checksums are published as `SHA256SUMS` with each [release](https://github.com/G
 3. Plug in the webcam and power on the Pi. After **2–3 minutes** the open Wi-Fi
    **`OnviPi-Setup-XXXX`** appears – even if an Ethernet cable is connected.
 4. Join it with your phone. The wizard opens automatically (otherwise go to `http://10.42.0.1`):
-   **Camera → Preview → Access → Wi-Fi**.
+   **Camera → Preview → Access → Wi-Fi** – see [Setup wizard](#4-setup-wizard) for every step.
 
 Afterwards the camera is reachable at `http://onvipi-<name>.local`. At the end the wizard
 shows the credentials for Home Assistant – take a screenshot.
@@ -170,22 +150,68 @@ The Pi opens the **open** Wi-Fi `OnviPi-Setup-…` when
 - **no user** has been set up yet (freshly flashed OnviPiOS) – immediately, even on Ethernet,
 - or it finds **no network** at startup (no cable, no known Wi-Fi).
 
-| Step | Content |
-|---|---|
-| 1 · Start | Welcome |
-| 2 · Camera | name, USB device, format, resolution, frame rate, orientation, timestamp |
-| 3 · Preview | current picture from the camera |
-| 4 · Access | user and password for the Pi, SSH on/off, Wi-Fi country, time zone |
-| 5 · Wi-Fi | choose a network and connect – or skip it when the Pi stays on Ethernet |
+Join it with your phone – the wizard opens on its own (otherwise go to `http://10.42.0.1`):
 
-**About the “Access” step:** this user is your login to the Pi (SSH or keyboard) – not the
-camera password for Home Assistant, which is generated automatically. The user can be created
-in the wizard **only once**. After that this part is locked, so nobody within range of the open
-hotspot (for example during a Wi-Fi outage) can reset the password. SSH can be switched on and
-off later on the settings page.
+<table>
+  <tr>
+    <td width="230" valign="top"><img src="docs/screenshots/wizard-1-start.png" alt="Wizard step 1: start" width="220"></td>
+    <td valign="top">
+      <h4>1 · Start</h4>
+      A short overview of what the wizard does. Nothing to enter yet.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top"><img src="docs/screenshots/wizard-2-camera.png" alt="Wizard step 2: camera" width="220"></td>
+    <td valign="top">
+      <h4>2 · Camera</h4>
+      Give the camera a name – it appears in Home Assistant and becomes the hostname
+      (<code>onvipi-&lt;name&gt;.local</code>). Choose the USB webcam, format, resolution and
+      frame rate; only combinations the webcam supports are offered. Orientation and the
+      timestamp in the picture can be set here as well.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top"><img src="docs/screenshots/wizard-3-preview.png" alt="Wizard step 3: preview" width="220"></td>
+    <td valign="top">
+      <h4>3 · Preview</h4>
+      A fresh picture from the camera to check that it is the right one and correctly
+      oriented. <i>(The screenshot shows a test pattern.)</i>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top"><img src="docs/screenshots/wizard-4-access.png" alt="Wizard step 4: access" width="220"></td>
+    <td valign="top">
+      <h4>4 · Access</h4>
+      Create your login to the Pi (SSH or keyboard) and decide whether SSH is enabled.
+      This is <b>not</b> the camera password for Home Assistant – that one is generated
+      automatically.<br><br>
+      The user can be created here <b>only once</b>. Afterwards this part is locked, so nobody
+      within range of the open hotspot (e.g. during a Wi-Fi outage) can reset the password.
+      SSH can be switched on and off later on the settings page.<br><br>
+      Also set the Wi-Fi country (allowed channels) and the time zone (timestamp in the picture).
+    </td>
+  </tr>
+  <tr>
+    <td valign="top"><img src="docs/screenshots/wizard-5-wifi.png" alt="Wizard step 5: Wi-Fi" width="220"></td>
+    <td valign="top">
+      <h4>5 · Wi-Fi</h4>
+      Pick your network and enter the password. Hidden networks can be entered by name.
+      If the Pi stays on Ethernet, choose <i>Skip Wi-Fi</i>.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top"><img src="docs/screenshots/wizard-6-done.png" alt="Wizard: done, credentials for Home Assistant" width="220"></td>
+    <td valign="top">
+      <h4>Done</h4>
+      The hotspot switches off and your phone returns to your regular Wi-Fi. The page shows
+      everything you need to <a href="#3-add-to-home-assistant">add the camera to Home Assistant</a>
+      – take a screenshot of the credentials.<br><br>
+      If the hotspot appears again, the Wi-Fi password was wrong – just connect and try again.
+    </td>
+  </tr>
+</table>
 
-If you rename the camera in the wizard, the hostname follows (`onvipi-<name>.local`) as long as
-it was assigned automatically.
+<sub>All data shown in the screenshots are examples.</sub>
 
 Start it manually – also on Ethernet:
 
@@ -199,11 +225,19 @@ sudo onvipi-wifi portal      # hotspot + wizard right away (stop with Ctrl-C)
 
 ### Settings page
 
-The settings page is at **`http://<pi>.local`** (port 80) – log in with username `admin` and the
-camera password. It contains a preview, instructions and credentials for Home Assistant, the
-camera (name, device, format, resolution, frame rate), motion detection, password change,
-network status, SSH on/off and “Restart services”. After 5 failed logins the address is
-blocked for 10 minutes.
+<table>
+  <tr>
+    <td width="230" valign="top"><img src="docs/screenshots/settings.png" alt="Settings page" width="220"></td>
+    <td valign="top">
+      The settings page is at <b><code>http://&lt;pi&gt;.local</code></b> (port 80) – log in with
+      username <code>admin</code> and the camera password.<br><br>
+      It contains a live preview, instructions and credentials for Home Assistant, the camera
+      settings (name, device, format, resolution, frame rate), motion detection, password
+      change, network status, SSH on/off and “Restart services”.<br><br>
+      After 5 failed logins the address is blocked for 10 minutes.
+    </td>
+  </tr>
+</table>
 
 > [!TIP]
 > **Remote access:** a VPN (for example WireGuard on your router) is the safest way – nothing is
