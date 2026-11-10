@@ -1,0 +1,14 @@
+[Unit]
+Description=PiCam ONVIF-Server (Device, Media, Events für Home Assistant)
+After=network-online.target go2rtc.service
+Wants=network-online.target
+
+[Service]
+User=picam
+SupplementaryGroups=video
+ExecStart=/usr/bin/python3 /opt/picam/picam_onvif.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=PiCam WLAN-Einrichtung (Hotspot + Captive Portal)
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/picam/picam_wifi.py run
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
