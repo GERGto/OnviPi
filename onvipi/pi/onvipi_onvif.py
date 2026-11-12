@@ -6,7 +6,8 @@ Dieser schlanke Server spricht die ONVIF-SOAP-Operationen selbst, die die
 Home-Assistant-ONVIF-Integration braucht, und verweist fürs Video auf go2rtc:
 
   * Device : GetSystemDateAndTime, GetDeviceInformation, GetCapabilities, GetServices,
-             GetScopes, GetServiceCapabilities, GetNetworkInterfaces (MAC = ID in HA)
+             GetScopes, GetServiceCapabilities, GetNetworkInterfaces (MAC = ID in HA),
+             SystemReboot, SetSystemDateAndTime (die beiden Tasten, die HA immer anlegt)
   * Media  : GetProfiles, GetVideoSources, GetStreamUri (-> go2rtc RTSP),
              GetSnapshotUri (-> go2rtc frame.jpeg), GetServiceCapabilities
   * Events : GetEventProperties, GetServiceCapabilities, CreatePullPointSubscription,
@@ -18,9 +19,11 @@ bildet die Differenz aufeinanderfolgender Bilder und misst deren mittlere Hellig
 (signalstats.YAVG). Schwelle aus MOTION_SENSITIVITY (0-100). Der Analyse-ffmpeg läuft
 nur, solange mindestens eine Event-Subscription aktiv ist (spart CPU).
 
-Hört auf ONVIF_PORT (Standard 8000). onvipi_wsd verweist darauf.
+Jede aktive Kamera aus cameras.json ist ein eigenes ONVIF-Gerät auf ihrem eigenen Port
+(ab ONVIF_PORT, Standard 8000) mit eigener MAC/ID. onvipi_wsd verweist darauf.
 """
 import base64
+import calendar
 import hashlib
 import hmac
 import http.server
@@ -34,12 +37,13 @@ import time
 import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from onvipilib import (CONF, device_id, load_conf, primary_interface, primary_ip,  # noqa: E402
-                      primary_mac)
-from onvipi_camera import output_size  # noqa: E402
+from onvipilib import CONF, load_conf, primary_interface, primary_ip  # noqa: E402
+from onvipi_camera import (camera_uuid, effective_mac, get_camera, load_cameras,  # noqa: E402
+                           output_size, sub_id, sub_size)
 
 log = logging.getLogger("onvipi-onvif")
-PORT = int(os.environ.get("ONVIPI_ONVIF_PORT", os.environ.get("ONVIF_PORT", "8000")))
+PRIV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "onvipi_priv.py")
+RUN_DIR = os.environ.get("ONVIPI_RUN_DIR", "/run/onvipi")   # RuntimeDirectory der Unit
 RTSP_PORT = 8554
 GO2RTC_API = 1984
 
@@ -63,6 +67,24 @@ def iso(offset=0):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + offset))
 
 
+def zone_mask(zones, w, h):
+    """Indizes der Pixel (w×h-Graubild), die in einer der Zonen liegen. Leer = ganzes Bild."""
+    if not zones:
+        return None
+    idx = set()
+    for z in zones:
+        x0, x1 = int(z["x"] * w), max(int(z["x"] * w) + 1, int(round((z["x"] + z["w"]) * w)))
+        y0, y1 = int(z["y"] * h), max(int(z["y"] * h) + 1, int(round((z["y"] + z["h"]) * h)))
+        for y in range(y0, min(y1, h)):
+            idx.update(range(y * w + x0, y * w + min(x1, w)))
+    return sorted(idx) or None
+
+
+def recording_wants_motion(conf):
+    """Aufzeichnung "bei Bewegung" braucht die Analyse auch ohne Home-Assistant-Abo."""
+    return conf.get("REC_MODE") == "motion" and bool(conf.get("REC_UUID"))
+
+
 def read_exact(f, n):
     """Genau n Bytes lesen (ein komplettes Graubild), sonst b'' bei Stream-Ende."""
     data = b""
@@ -78,13 +100,27 @@ def read_exact(f, n):
 class Motion:
     """Lokale Bewegungserkennung per ffmpeg-Framedifferenz (signalstats.YAVG)."""
 
-    def __init__(self, sub_count):
+    def __init__(self, cam_id, sub_count):
+        self.cam_id = cam_id
         self.sub_count = sub_count          # callable -> Anzahl aktiver Subscriptions
         self.state = False
         self.seq = 0                        # erhöht sich bei jedem Zustandswechsel
         self.cond = threading.Condition()
         self.proc = None
+        self.marker = os.path.join(RUN_DIR, f"motion-{cam_id}")
+        self.marked = 0
         threading.Thread(target=self._loop, daemon=True).start()
+
+    def mark(self):
+        """Solange Bewegung anliegt, die Marker-Datei aktuell halten (liest onvipi_record)."""
+        now = time.time()
+        if now - self.marked >= 1:
+            self.marked = now
+            try:
+                with open(self.marker, "w") as f:
+                    f.write(str(int(now)))
+            except OSError:
+                pass
 
     def set_state(self, val):
         with self.cond:
@@ -92,7 +128,7 @@ class Motion:
                 self.state = val
                 self.seq += 1
                 self.cond.notify_all()
-                log.info("Motion %s", "detected" if val else "ended")
+                log.info("[%s] Motion %s", self.cam_id, "detected" if val else "ended")
 
     def wait_change(self, last_seq, timeout):
         with self.cond:
@@ -101,41 +137,40 @@ class Motion:
             return self.seq, self.state
 
     @staticmethod
-    def threshold(conf):
+    def threshold(conf, cam):
         t = conf.get("MOTION_THRESHOLD", "")
         if t:  # expliziter Absolutwert (für Feintuning/Tests)
             try:
                 return float(t)
             except ValueError:
                 pass
-        try:
-            s = max(0, min(100, int(conf.get("MOTION_SENSITIVITY", "60"))))
-        except ValueError:
-            s = 60
+        s = cam["sensitivity"]
         # Mittlere Pixeldifferenz (MAFD, 0-255): Rauschen ~0,3-0,8, Bewegung deutlich höher.
         return 20.0 - (s / 100.0) * (20.0 - 1.5)  # 0 -> 20 (stumpf), 100 -> 1.5 (scharf)
 
     def _loop(self):
         while True:
             conf = load_conf(CONF)
-            if conf.get("MOTION_ENABLE", "1") != "1" or self.sub_count() == 0:
+            cam = get_camera(load_cameras(conf), self.cam_id)
+            wanted = self.sub_count() > 0 or recording_wants_motion(conf)
+            if not cam or not cam["motion"] or not wanted:
                 self.set_state(False)
                 time.sleep(2)
                 continue
             try:
-                self._analyze(conf)
+                self._analyze(conf, cam)
             except Exception:
-                log.exception("Motion analysis aborted")
+                log.exception("[%s] Motion analysis aborted", self.cam_id)
                 time.sleep(3)
             self.set_state(False)
 
-    def _analyze(self, conf):
+    def _analyze(self, conf, cam):
         # ffmpeg liefert winzige Graubilder als Rohdaten; die Differenz rechnen wir selbst.
         # Textbasierte Metadaten puffert ffmpeg bis zum Prozessende – Rohframes nicht.
-        thr = self.threshold(conf)
+        thr = self.threshold(conf, cam)
         fps = conf.get("MOTION_FPS", "5")
         cooldown = float(conf.get("MOTION_COOLDOWN", "8") or 8)
-        url = f"rtsp://{conf.get('CAM_USER', 'admin')}:{conf.get('CAM_PASSWORD', '')}@127.0.0.1:{RTSP_PORT}/onvipi"
+        url = f"rtsp://{conf.get('CAM_USER', 'admin')}:{conf.get('CAM_PASSWORD', '')}@127.0.0.1:{RTSP_PORT}/{self.cam_id}"
         w, h = 64, 36
         n = w * h
         vf = f"fps={fps},scale={w}:{h},format=gray"
@@ -143,8 +178,11 @@ class Motion:
                "-rtsp_transport", "tcp", "-i", url, "-an", "-vf", vf,
                "-f", "rawvideo", "-flush_packets", "1", "pipe:1"]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        log.info("Motion analysis running (threshold %.1f, %s fps)", thr, fps)
+        log.info("[%s] Motion analysis running (threshold %.1f, %s fps)",
+                 self.cam_id, thr, fps)
+        mask = zone_mask(cam["motion_zones"], w, h)   # nur diese Pixel zählen
         prev, consec, last_over, warm = None, 0, 0.0, 6  # erste Frames (Startruckler) verwerfen
+        checked = time.time()
         try:
             while True:
                 buf = read_exact(self.proc.stdout, n)
@@ -153,7 +191,10 @@ class Motion:
                 if prev is not None and warm > 0:
                     warm -= 1
                 elif prev is not None:
-                    score = sum(abs(a - b) for a, b in zip(buf, prev)) / n
+                    if mask:
+                        score = sum(abs(buf[i] - prev[i]) for i in mask) / len(mask)
+                    else:
+                        score = sum(abs(a - b) for a, b in zip(buf, prev)) / n
                     now = time.time()
                     if score > thr:
                         consec += 1
@@ -164,9 +205,13 @@ class Motion:
                         self.set_state(True)
                     elif self.state and now - last_over > cooldown:
                         self.set_state(False)
+                if self.state:
+                    self.mark()
                 prev = buf
-                if self.sub_count() == 0:
-                    break
+                if self.sub_count() == 0 and time.time() - checked > 5:
+                    checked = time.time()   # ohne HA-Abo nur für die Aufzeichnung weiterlaufen
+                    if not recording_wants_motion(load_conf(CONF)):
+                        break
         finally:
             try:
                 self.proc.terminate()
@@ -178,16 +223,28 @@ class Motion:
 
 # --------------------------------------------------------------------------- ONVIF
 class Onvif:
-    def __init__(self):
-        conf = load_conf(CONF)
-        self.name = conf.get("CAM_NAME", "OnviPi") or "OnviPi"
-        self.w, self.h = output_size(conf)  # bei Hochformat getauscht
-        self.fps = conf.get("FRAMERATE", "30")
-        self.uuid = device_id()
+    """Ein ONVIF-Gerät = eine Kamera."""
+
+    def __init__(self, cam):
+        self.cam = cam
+        self.id = cam["id"]                 # go2rtc-Stream und Profil-Token
+        self.port = cam["port"]
+        self.name = re.sub(r"[^A-Za-z0-9_.-]+", "_", cam["name"]) or "OnviPi"
+        self.w, self.h = output_size(cam)   # bei Hochformat getauscht
+        self.fps = cam["fps"]
+        # Profile: Hauptstream, optional der Zweitstream in kleiner Auflösung
+        self.profiles = [(self.id, self.w, self.h, "onvipi", "vec0")]
+        if cam.get("substream"):
+            sw, sh = sub_size(cam)
+            self.profiles.append((sub_id(cam), sw, sh, "sub", "vec1"))
+        self.uuid = camera_uuid(cam)
         self.subs = {}
         self.sub_lock = threading.Lock()
         self.sub_next = 0
-        self.motion = Motion(self.sub_count)
+        self.motion = Motion(self.id, self.sub_count)
+
+    def mac(self):
+        return effective_mac(self.cam)
 
     # -- Subscriptions
     def sub_count(self):
@@ -214,7 +271,7 @@ class Onvif:
         return primary_ip() or "127.0.0.1"
 
     def xaddr(self, svc):
-        return f"http://{self.ip()}:{PORT}/onvif/{svc}"
+        return f"http://{self.ip()}:{self.port}/onvif/{svc}"
 
     # -- Device
     def GetSystemDateAndTime(self, _):
@@ -275,7 +332,7 @@ class Onvif:
 
     def GetNetworkInterfaces(self, _):
         # HA nimmt die MAC als eindeutige ID des Geräts; ohne Antwort bricht der Flow ab
-        mac = primary_mac()
+        mac = self.mac()
         if not mac:
             raise NotImplementedError
         name = primary_interface() or "eth0"
@@ -294,13 +351,36 @@ class Onvif:
             f"onvif://www.onvif.org/name/{self.name}",
             "onvif://www.onvif.org/hardware/RaspberryPi",
         ]
-        mac = primary_mac()
+        mac = self.mac()
         if mac:
             scopes.append(f"onvif://www.onvif.org/MAC/{mac}")
         items = "".join(
             "<tds:Scopes><tt:ScopeDef>Fixed</tt:ScopeDef>"
             f"<tt:ScopeItem>{s}</tt:ScopeItem></tds:Scopes>" for s in scopes)
         return f"<tds:GetScopesResponse>{items}</tds:GetScopesResponse>"
+
+    def SystemReboot(self, _):
+        log.info("Reboot requested via ONVIF")
+        threading.Timer(1.5, privileged, args=("reboot",)).start()  # erst antworten
+        return ("<tds:SystemRebootResponse><tds:Message>Rebooting now</tds:Message>"
+                "</tds:SystemRebootResponse>")
+
+    def SetSystemDateAndTime(self, body):
+        """HA-Taste "Set system date and time": Uhr auf die Zeit des Clients stellen.
+
+        Der Pi holt die Zeit selbst per NTP; die Hilfsroutine stellt die Uhr deshalb nur,
+        solange keine NTP-Synchronisation besteht (z. B. Netz ohne Internet).
+        """
+        utc = body.partition("UTCDateTime")[2]
+        try:
+            y, mo, d, h, mi, sec = (int(tag_value(utc, k)) for k in
+                                    ("Year", "Month", "Day", "Hour", "Minute", "Second"))
+            epoch = calendar.timegm((y, mo, d, h, mi, sec))
+        except (TypeError, ValueError):
+            epoch = None  # z. B. DateTimeType=NTP ohne Zeitangabe – nichts zu tun
+        if epoch:
+            privileged("set-time", str(epoch))
+        return "<tds:SetSystemDateAndTimeResponse/>"
 
     def GetServiceCapabilities(self, _):
         return ("<tds:GetServiceCapabilitiesResponse><tds:Capabilities>"
@@ -316,16 +396,17 @@ class Onvif:
             "</tt:Resolution></trt:VideoSources></trt:GetVideoSourcesResponse>"
         )
 
-    def _profile(self):
+    def _profile(self, profile):
+        token, w, h, name, vec = profile
         return (
-            "<trt:Profiles token=\"onvipi\" fixed=\"true\"><tt:Name>onvipi</tt:Name>"
+            f"<trt:Profiles token=\"{token}\" fixed=\"true\"><tt:Name>{name}</tt:Name>"
             "<tt:VideoSourceConfiguration token=\"vsc0\"><tt:Name>vsc0</tt:Name>"
-            "<tt:UseCount>1</tt:UseCount><tt:SourceToken>vs0</tt:SourceToken>"
+            f"<tt:UseCount>{len(self.profiles)}</tt:UseCount><tt:SourceToken>vs0</tt:SourceToken>"
             f"<tt:Bounds x=\"0\" y=\"0\" width=\"{self.w}\" height=\"{self.h}\"/>"
             "</tt:VideoSourceConfiguration>"
-            "<tt:VideoEncoderConfiguration token=\"vec0\"><tt:Name>vec0</tt:Name>"
+            f"<tt:VideoEncoderConfiguration token=\"{vec}\"><tt:Name>{vec}</tt:Name>"
             "<tt:UseCount>1</tt:UseCount><tt:Encoding>H264</tt:Encoding>"
-            f"<tt:Resolution><tt:Width>{self.w}</tt:Width><tt:Height>{self.h}</tt:Height></tt:Resolution>"
+            f"<tt:Resolution><tt:Width>{w}</tt:Width><tt:Height>{h}</tt:Height></tt:Resolution>"
             "<tt:Quality>5</tt:Quality>"
             f"<tt:RateControl><tt:FrameRateLimit>{self.fps}</tt:FrameRateLimit>"
             "<tt:EncodingInterval>1</tt:EncodingInterval><tt:BitrateLimit>2500</tt:BitrateLimit>"
@@ -335,11 +416,17 @@ class Onvif:
             "</tt:VideoEncoderConfiguration></trt:Profiles>"
         )
 
-    def GetProfiles(self, _):
-        return f"<trt:GetProfilesResponse>{self._profile()}</trt:GetProfilesResponse>"
+    def _requested(self, body):
+        """Profil aus <ProfileToken> der Anfrage, sonst das Hauptprofil."""
+        token = tag_value(body or "", "ProfileToken")
+        return next((p for p in self.profiles if p[0] == token), self.profiles[0])
 
-    def GetProfile(self, _):
-        p = (self._profile().replace("<trt:Profiles ", "<trt:Profile ")
+    def GetProfiles(self, _):
+        return ("<trt:GetProfilesResponse>" + "".join(self._profile(p) for p in self.profiles)
+                + "</trt:GetProfilesResponse>")
+
+    def GetProfile(self, body):
+        p = (self._profile(self._requested(body)).replace("<trt:Profiles ", "<trt:Profile ")
              .replace("</trt:Profiles>", "</trt:Profile>"))
         return f"<trt:GetProfileResponse>{p}</trt:GetProfileResponse>"
 
@@ -349,16 +436,17 @@ class Onvif:
                 "<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot>"
                 f"<tt:Timeout>PT60S</tt:Timeout></trt:MediaUri></trt:{tag}Response>")
 
-    def GetStreamUri(self, _):
-        return self._media_uri("GetStreamUri", f"rtsp://{self.ip()}:{RTSP_PORT}/onvipi")
+    def GetStreamUri(self, body):
+        stream = self._requested(body)[0]
+        return self._media_uri("GetStreamUri", f"rtsp://{self.ip()}:{RTSP_PORT}/{stream}")
 
     def GetSnapshotUri(self, _):
         return self._media_uri("GetSnapshotUri",
-                               f"http://{self.ip()}:{GO2RTC_API}/api/frame.jpeg?src=onvipi")
+                               f"http://{self.ip()}:{GO2RTC_API}/api/frame.jpeg?src={self.id}")
 
     def GetServiceCapabilitiesMedia(self, _):
         return ("<trt:GetServiceCapabilitiesResponse><trt:Capabilities>"
-                "<trt:ProfileCapabilities MaximumNumberOfProfiles=\"1\"/>"
+                f"<trt:ProfileCapabilities MaximumNumberOfProfiles=\"{len(self.profiles)}\"/>"
                 "<trt:StreamingCapabilities RTP_RTSP_TCP=\"true\"/>"
                 "</trt:Capabilities></trt:GetServiceCapabilitiesResponse>")
 
@@ -452,13 +540,24 @@ class Onvif:
 
 DEVICE_OPS = {"GetSystemDateAndTime", "GetDeviceInformation", "GetServices",
               "GetCapabilities", "GetScopes", "GetServiceCapabilities",
-              "GetNetworkInterfaces"}
+              "GetNetworkInterfaces", "SystemReboot", "SetSystemDateAndTime"}
 MEDIA_OPS = {"GetVideoSources", "GetProfiles", "GetProfile", "GetStreamUri",
              "GetSnapshotUri", "GetServiceCapabilities"}
 EVENTS_OPS = {"GetServiceCapabilities", "GetEventProperties", "CreatePullPointSubscription",
               "PullMessages", "Renew", "Unsubscribe", "SetSynchronizationPoint"}
 IDX_OPS = {"PullMessages", "Renew", "Unsubscribe", "SetSynchronizationPoint"}
 OP_RE = re.compile(r"<(?:[\w.-]+:)?(\w+)[ />]")
+
+
+def privileged(*args):
+    """Der Dienst läuft als 'onvipi'; Neustart/Uhrzeit erledigt onvipi_priv.py per sudo."""
+    try:
+        r = subprocess.run(["sudo", "-n", "/usr/bin/python3", PRIV, *args],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            log.warning("onvipi_priv %s failed: %s", args[0], r.stderr.strip())
+    except (OSError, subprocess.SubprocessError) as ex:
+        log.warning("onvipi_priv %s failed: %s", args[0], ex)
 
 
 def find_op(body, allowed):
@@ -571,20 +670,37 @@ def serve(onvif):
                 return self._send(fault("Internal error"), 500)
 
         def do_GET(self):
-            msg = b"OnviPi ONVIF\n"
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", str(len(msg)))
+            # Home Assistant verlinkt auf der Geräteseite ("Visit") http://<ip>:<onvif-port>
+            # -> zur Einstellungsseite weiterleiten.
+            host = (self.headers.get("Host") or onvif.ip()).rsplit(":", 1)[0]
+            self.send_response(302)
+            self.send_header("Location", f"http://{host}/")
+            self.send_header("Content-Length", "0")
             self.end_headers()
-            self.wfile.write(msg)
 
     http.server.ThreadingHTTPServer.allow_reuse_address = True
-    srv = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    log.info("ONVIF server on :%d  (XAddr %s)", PORT, onvif.xaddr("device_service"))
+    srv = http.server.ThreadingHTTPServer(("0.0.0.0", onvif.port), Handler)
+    log.info("ONVIF device '%s' on :%d  (XAddr %s)", onvif.name, onvif.port,
+             onvif.xaddr("device_service"))
     srv.serve_forever()
+
+
+def main():
+    cams = [c for c in load_cameras() if c["enabled"]]
+    if not cams:
+        log.warning("No camera enabled – waiting (the service restarts when one is set up)")
+    ports = set()
+    for cam in cams:
+        if cam["port"] in ports:
+            log.error("Port %d is used twice – camera '%s' skipped", cam["port"], cam["name"])
+            continue
+        ports.add(cam["port"])
+        threading.Thread(target=serve, args=(Onvif(cam),), daemon=True).start()
+    while True:
+        time.sleep(3600)
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"),
                         format="%(name)s: %(message)s")
-    serve(Onvif())
+    main()

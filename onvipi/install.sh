@@ -44,7 +44,7 @@ fi
 say "Starting services"
 systemctl daemon-reload
 systemctl restart onvipi-go2rtc.service onvipi-onvif.service onvipi-wsd.service \
-  onvipi-mqtt.service onvipi-wifi.service
+  onvipi-mqtt.service onvipi-record.service onvipi-wifi.service
 
 # shellcheck disable=SC1090
 . "$CONF"
@@ -54,7 +54,8 @@ cat <<EOF
 ────────────────────────────────────────────────────────────
  OnviPi “$CAM_NAME” is installed ($(cat /opt/onvipi/VERSION 2>/dev/null || echo dev))
 ────────────────────────────────────────────────────────────
- Settings:             http://$(hostname).local   (or http://$IP, login below)
+ Settings:             http://$(hostname).local   (or http://$IP)
+   Password: $CAM_PASSWORD        (change it under System)
  Live view (browser):  http://$(hostname).local:1984   (or http://$IP:1984)
  RTSP:                 rtsp://$CAM_USER:$CAM_PASSWORD@$IP:8554/onvipi
 
@@ -62,11 +63,12 @@ cat <<EOF
    Select the device “$(echo "$CAM_NAME" | tr -c 'A-Za-z0-9_.\n-' '_')”
    Username: $CAM_USER
    Password: $CAM_PASSWORD
+ Several webcams? Each one is its own ONVIF device – see the page “Cameras”.
 
- Setup hotspot (appears when no network is available):
+ Hotspot (appears when no network is available, to choose another Wi-Fi):
    Name:     $AP_SSID
-   Password: ${AP_PASSWORD:-(open – no password)}
-   Portal:   http://10.42.0.1
+   Password: ${AP_PASSWORD:-(open – the settings page itself asks for the password)}
+   Address:  http://10.42.0.1
 
  These details are also in $CONF (sudo cat $CONF).
  Set up Wi-Fi again:  sudo onvipi-wifi reset

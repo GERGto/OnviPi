@@ -17,6 +17,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from onvipilib import CONF, MQTT_CONF, STREAM_NAME, device_id, load_conf, primary_ip  # noqa: E402
+from onvipi_camera import effective_mac, load_cameras  # noqa: E402
 
 log = logging.getLogger("onvipi-mqtt")
 DISCOVERY = "homeassistant"
@@ -83,9 +84,15 @@ class Announcer:
             "manufacturer": "Raspberry Pi",
             "model": "OnviPi (Raspberry Pi + USB webcam)",
         }
+        # Gleiche MAC wie das ONVIF-Gerät der ersten Kamera -> Home Assistant führt beide
+        # zu EINEM Gerät zusammen (Diagnosewerte stehen dann direkt bei der Kamera).
+        cams = load_cameras(self.conf)
+        mac = effective_mac(cams[0]) if cams else None
+        if mac:
+            dev["connections"] = [["mac", mac]]
         ip = primary_ip()
         if ip:
-            dev["configuration_url"] = f"http://{ip}:1984/"
+            dev["configuration_url"] = f"http://{ip}/"
         return dev
 
     def publish_discovery(self):
@@ -150,7 +157,7 @@ class Announcer:
         ip = primary_ip()
         self.client.publish(f"{self.base}/stats", json.dumps({
             "cpu_temp": cpu_temp(), "wifi_signal": wifi_signal(), "ip": ip,
-            "onvif": f"{ip}:1984" if ip else None,
+            "onvif": f"{ip}:{self.conf.get('ONVIF_PORT', '8000')}" if ip else None,
         }), retain=True)
 
     def run(self):

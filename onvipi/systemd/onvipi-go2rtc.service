@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 User=onvipi
-SupplementaryGroups=video
+SupplementaryGroups=video audio
 ExecStartPre=+/usr/bin/python3 /opt/onvipi/onvipi_camera.py --ensure --render
 ExecStart=/usr/local/bin/go2rtc -config /etc/onvipi/go2rtc.yaml
 Restart=always

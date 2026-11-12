@@ -6,6 +6,9 @@ Wants=network-online.target
 [Service]
 User=onvipi
 SupplementaryGroups=video
+# /run/onvipi: motion markers for the recording service
+RuntimeDirectory=onvipi
+RuntimeDirectoryPreserve=yes
 ExecStart=/usr/bin/python3 /opt/onvipi/onvipi_onvif.py
 Restart=always
 RestartSec=5

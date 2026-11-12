@@ -3,7 +3,7 @@ Description=OnviPi first-boot setup (hostname, camera password, webcam detection
 # Enabled in the OnviPiOS image only; runs once while no onvipi.conf exists
 ConditionPathExists=!/etc/onvipi/onvipi.conf
 After=local-fs.target systemd-udevd.service
-Before=NetworkManager.service avahi-daemon.service onvipi-go2rtc.service onvipi-onvif.service onvipi-wsd.service onvipi-wifi.service onvipi-mqtt.service
+Before=NetworkManager.service avahi-daemon.service onvipi-go2rtc.service onvipi-onvif.service onvipi-wsd.service onvipi-wifi.service onvipi-mqtt.service onvipi-record.service
 
 [Service]
 Type=oneshot

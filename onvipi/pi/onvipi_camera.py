@@ -1,25 +1,53 @@
 #!/usr/bin/env python3
-"""Erkennt die USB-Webcam und schreibt die go2rtc-Konfiguration.
+"""Erkennt die USB-Webcams, verwaltet die Kameraliste und schreibt die go2rtc-Konfiguration.
 
-  onvipi_camera.py --detect   Webcam suchen, Format wählen, in onvipi.conf speichern
-  onvipi_camera.py --ensure   nur neu erkennen, wenn die eingestellte Webcam fehlt/nicht passt
-  onvipi_camera.py --render   /etc/onvipi/go2rtc.yaml aus onvipi.conf erzeugen
+  onvipi_camera.py --detect   alle Webcams suchen und als Kameras anlegen (neue Installation)
+  onvipi_camera.py --ensure   Kameraliste prüfen: fehlende/getauschte Webcam neu zuordnen
+  onvipi_camera.py --render   /etc/onvipi/go2rtc.yaml aus der Kameraliste erzeugen
+
+Jede Kamera ist ein Eintrag in /etc/onvipi/cameras.json und erscheint im Netz als
+eigenes ONVIF-Gerät (eigener Port, eigene ID) – so bekommt Home Assistant pro Webcam
+ein Gerät mit Livebild und Bewegungssensor.
+
+  id           Name des go2rtc-Streams und ONVIF-Profil-Token ("onvipi", "cam2", …)
+  name         Anzeigename (ONVIF-Gerätename in Home Assistant)
+  enabled      Stream + ONVIF-Gerät aktiv
+  device       /dev/v4l/by-id/… (bleibt beim Umstecken gleich)
+  format/size/fps, rotate, overlay   Bildquelle und Darstellung
+  motion, sensitivity                Bewegungserkennung
+  motion_zones   Bereiche, in denen Bewegung zählt (leer = ganzes Bild)
+  privacy        Privatzonen – werden im Bild geschwärzt (auch für Aufnahmen)
+  audio          Ton vom Mikrofon der Webcam (Opus)
+  substream      zusätzlicher Stream "<id>_sub" in kleiner Auflösung (zweites ONVIF-Profil)
+  Zonen sind Rechtecke {x, y, w, h} mit Werten 0–1 relativ zum (gedrehten) Bild.
+  port         Port des ONVIF-Geräts
+  mac          ID des Geräts in Home Assistant – einmal vergeben, danach unverändert
 """
 import argparse
 import glob
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from onvipilib import CONF, GO2RTC_YAML, STREAM_NAME, load_conf, save_conf, set_group  # noqa: E402
+from onvipilib import (CAMERAS, CONF, GO2RTC_YAML, STREAM_NAME, builtin_mac,  # noqa: E402
+                       device_id, load_conf, load_json, primary_mac, save_json, set_group)
 
 FOURCC = {"MJPG": "mjpeg", "YUYV": "yuyv422", "H264": "h264"}
 PREFERRED_SIZES = ["1280x720", "1920x1080", "1024x768", "800x600", "640x480"]
+ROTATIONS = (0, 90, 180, 270)
+MAX_CAMERAS = 4
+MAX_ZONES = 8
+SUB_WIDTH = 640     # Breite des Zweitstreams
+STREAM_HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "onvipi_stream.py")
+FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 
+# --------------------------------------------------------------------------- Erkennung
 def parse_formats(text):
     """Wertet `v4l2-ctl --list-formats-ext` aus -> {format: {größe: [fps, …] absteigend}}."""
     formats, current, size = {}, None, None
@@ -63,20 +91,41 @@ def choose(formats):
 
 
 def find_devices():
-    by_id = sorted(glob.glob("/dev/v4l/by-id/*-video-index0"))
-    if by_id:
-        return by_id
+    """Stabile Gerätepfade aller USB-Kameras.
+
+    by-id zuerst (Hersteller + Seriennummer). Zwei baugleiche Webcams ohne Seriennummer
+    teilen sich einen by-id-Namen – die zweite kommt dann über by-path (USB-Anschluss).
+    """
+    devs, seen = [], set()
+    for pattern, usb_only in (("/dev/v4l/by-id/*-video-index0", False),
+                              ("/dev/v4l/by-path/*-video-index0", True)):
+        for dev in sorted(glob.glob(pattern)):
+            if usb_only and "usb" not in os.path.basename(dev):
+                continue  # Pi-interne Codec-/CSI-Geräte
+            real = os.path.realpath(dev)
+            if real not in seen:
+                seen.add(real)
+                devs.append(dev)
+    if devs:
+        return devs
     # Fallback: alle Capture-Geräte (ohne Pi-interne Codec-Geräte /dev/video1x/2x/3x)
     return [d for d in sorted(glob.glob("/dev/video*")) if re.fullmatch(r"/dev/video[0-9]", d)]
 
 
 def camera_label(dev):
-    """Lesbarer Name aus dem /dev/v4l/by-id-Pfad, sonst der Gerätepfad."""
+    """Lesbarer Name: aus dem by-id-Pfad, sonst der Name, den der Treiber meldet."""
     m = re.match(r"usb-(.+?)-video-index\d+$", os.path.basename(dev))
-    if not m:
+    if m and "/by-id/" in dev:
+        name = re.sub(r"\s+\d+$", "", m.group(1).replace("_", " ").strip())  # Seriennummer weg
+        name = re.sub(r"\s+", " ", name)
+        if name:
+            return name
+    try:
+        node = os.path.basename(os.path.realpath(dev))
+        with open(f"/sys/class/video4linux/{node}/name", encoding="utf-8") as f:
+            return f.read().strip().split(":")[0] or dev
+    except OSError:
         return dev
-    name = re.sub(r"\s+\d+$", "", m.group(1).replace("_", " ").strip())  # Seriennummer weg
-    return re.sub(r"\s+", " ", name) or dev
 
 
 def formats_of(dev):
@@ -89,63 +138,237 @@ def formats_of(dev):
     return parse_formats(out)
 
 
-def list_cameras():
-    """Für die Geräteauswahl im Portal: [{dev, label, formats}] je erkannter USB-Kamera."""
-    cams = []
+def microphone_of(dev):
+    """ALSA-Gerät des Mikrofons derselben USB-Webcam, z. B. 'plughw:CARD=C920,DEV=0' (oder None)."""
+    try:
+        node = os.path.basename(os.path.realpath(dev))
+        iface = os.path.realpath(f"/sys/class/video4linux/{node}/device")
+        for card in sorted(glob.glob(os.path.join(os.path.dirname(iface), "*", "sound", "card*"))):
+            if not glob.glob(os.path.join(card, "pcm*c")):
+                continue  # nur Wiedergabe, kein Aufnahmegerät
+            with open(os.path.join(card, "id"), encoding="utf-8") as f:
+                return f"plughw:CARD={f.read().strip()},DEV=0"
+    except OSError:
+        pass
+    return None
+
+
+def list_devices():
+    """[{dev, label, formats, mic}] je angeschlossener USB-Kamera."""
+    found = []
     for dev in find_devices():
         formats = formats_of(dev)
         if formats:
-            cams.append({"dev": dev, "label": camera_label(dev), "formats": formats})
-    return cams
+            found.append({"dev": dev, "label": camera_label(dev), "formats": formats,
+                          "mic": bool(microphone_of(dev))})
+    return found
 
 
-def detect():
-    for dev in find_devices():
-        formats = formats_of(dev)
-        fmt, size = choose(formats)
-        if fmt:
-            fps_list = formats[fmt].get(size) or []
-            fps = min(fps_list[0], 30) if fps_list else None  # höchste native fps, gedeckelt
-            return dev, fmt, size, fps
-    return None, None, None, None
+# --------------------------------------------------------------------------- Kameraliste
+def synthetic_mac(cam_id):
+    """Feste, lokal verwaltete MAC für zusätzliche Kameras (HA unterscheidet Geräte daran)."""
+    b = bytearray(hashlib.sha1(f"{device_id()}:{cam_id}".encode()).digest()[:6])
+    b[0] = (b[0] & 0xFC) | 0x02  # lokal verwaltet, keine Gruppenadresse
+    return ":".join(f"{x:02x}" for x in b)
 
 
-def needs_detect(conf):
-    """Eingestellte Webcam fehlt (z. B. getauscht) oder kann Format/Auflösung nicht mehr."""
-    dev = conf.get("VIDEO_DEVICE") or ""
-    if not os.path.exists(dev):
-        return True
-    formats = formats_of(dev)
-    if not formats:
-        return False  # Gerät antwortet gerade nicht – nichts überschreiben
-    return conf.get("VIDEO_SIZE") not in formats.get(conf.get("VIDEO_FORMAT"), {})
+def camera_uuid(cam):
+    """ONVIF-Endpunkt-ID. Die erste Kamera behält die bisherige Geräte-ID."""
+    if cam["id"] == STREAM_NAME:
+        return device_id()
+    return str(uuid.uuid5(uuid.UUID(device_id()), cam["id"]))
 
 
-ROTATIONS = (0, 90, 180, 270)
+def effective_mac(cam):
+    """MAC, unter der Home Assistant die Kamera kennt (bis zur Vergabe: aktive Schnittstelle)."""
+    return cam.get("mac") or primary_mac()
 
 
-def rotation(conf):
-    """Drehung im Uhrzeigersinn aus ROTATE (0/90/180/270), ungültig -> 0."""
+def _int(value, default):
     try:
-        r = int(conf.get("ROTATE", "0") or 0)
-    except ValueError:
-        return 0
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def clean_zones(zones):
+    """Gültige Rechtecke {x, y, w, h} (0–1, innerhalb des Bildes), höchstens MAX_ZONES."""
+    out = []
+    for z in zones if isinstance(zones, list) else []:
+        try:
+            x, y = max(0.0, min(1.0, float(z["x"]))), max(0.0, min(1.0, float(z["y"])))
+            w, h = min(float(z["w"]), 1.0 - x), min(float(z["h"]), 1.0 - y)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if w >= 0.02 and h >= 0.02:
+            out.append({"x": round(x, 4), "y": round(y, 4), "w": round(w, 4), "h": round(h, 4)})
+    return out[:MAX_ZONES]
+
+
+def normalize(cam):
+    """Füllt fehlende Felder und begrenzt Werte – die Datei darf von Hand bearbeitet werden."""
+    rot = _int(cam.get("rotate"), 0)
+    return {
+        "id": str(cam.get("id") or STREAM_NAME),
+        "name": (str(cam.get("name") or "").strip() or "OnviPi")[:48],
+        "enabled": bool(cam.get("enabled", True)),
+        "device": str(cam.get("device") or ""),
+        "format": str(cam.get("format") or "mjpeg"),
+        "size": str(cam.get("size") or "1280x720"),
+        "fps": max(1, min(60, _int(cam.get("fps"), 15))),
+        "rotate": rot if rot in ROTATIONS else 0,
+        "overlay": bool(cam.get("overlay", True)),
+        "motion": bool(cam.get("motion", True)),
+        "sensitivity": max(0, min(100, _int(cam.get("sensitivity"), 60))),
+        "motion_zones": clean_zones(cam.get("motion_zones")),
+        "privacy": clean_zones(cam.get("privacy")),
+        "audio": bool(cam.get("audio", False)),
+        "substream": bool(cam.get("substream", False)),
+        "port": _int(cam.get("port"), 8000),
+        "mac": cam.get("mac") or None,
+    }
+
+
+def legacy_camera(conf):
+    """Kamera aus den früheren Einzelwerten in onvipi.conf (Installationen vor 2.1)."""
+    return normalize({
+        "id": STREAM_NAME, "name": conf.get("CAM_NAME"), "device": conf.get("VIDEO_DEVICE"),
+        "format": conf.get("VIDEO_FORMAT"), "size": conf.get("VIDEO_SIZE"),
+        "fps": conf.get("FRAMERATE"), "rotate": conf.get("ROTATE"),
+        "overlay": conf.get("OVERLAY_TIME", "1") == "1",
+        "motion": conf.get("MOTION_ENABLE", "1") == "1",
+        "sensitivity": conf.get("MOTION_SENSITIVITY"),
+        "port": conf.get("ONVIF_PORT"), "mac": None,
+    })
+
+
+def load_cameras(conf=None):
+    """Kameraliste; ohne cameras.json die eine Kamera aus onvipi.conf (wird nicht gespeichert)."""
+    data = load_json(CAMERAS)
+    if isinstance(data, dict) and isinstance(data.get("cameras"), list):
+        return [normalize(c) for c in data["cameras"] if isinstance(c, dict)]
+    conf = load_conf(CONF) if conf is None else conf
+    return [legacy_camera(conf)] if conf.get("VIDEO_DEVICE") else []
+
+
+def save_cameras(cams):
+    save_json(CAMERAS, {"cameras": [normalize(c) for c in cams]})
+
+
+def get_camera(cams, cam_id):
+    return next((c for c in cams if c["id"] == cam_id), None)
+
+
+def new_camera(cams, device, conf=None):
+    """Legt für ein erkanntes Gerät ({dev, label, formats}) einen Eintrag mit freier ID/Port an."""
+    conf = load_conf(CONF) if conf is None else conf
+    ids = {c["id"] for c in cams}
+    ports = {c["port"] for c in cams}
+    if STREAM_NAME not in ids:
+        cam_id = STREAM_NAME
+    else:
+        cam_id = next(f"cam{n}" for n in range(2, 100) if f"cam{n}" not in ids)
+    port = _int(conf.get("ONVIF_PORT"), 8000)
+    while port in ports:
+        port += 1
+    fmt, size = choose(device["formats"])
+    fps_list = device["formats"].get(fmt, {}).get(size) or []
+    first = cam_id == STREAM_NAME
+    return normalize({
+        "id": cam_id, "device": device["dev"], "format": fmt, "size": size,
+        "name": conf.get("CAM_NAME") if first else device["label"],
+        "fps": min(fps_list[0], 30) if fps_list else 15,  # höchste native fps, gedeckelt
+        "port": port, "mac": None if first else synthetic_mac(cam_id),
+    })
+
+
+def _same(dev_a, dev_b):
+    return bool(dev_a and dev_b) and os.path.realpath(dev_a) == os.path.realpath(dev_b)
+
+
+def reconcile(cams, devices):
+    """Gleicht die Liste mit den angeschlossenen Geräten ab. Gibt True zurück, wenn geändert.
+
+    * Genau eine Kamera fehlt und genau ein Gerät ist frei -> Webcam wurde getauscht.
+    * Gerät kann das eingestellte Format nicht mehr -> neu wählen.
+    Mehrdeutige Fälle bleiben unverändert (die Oberfläche zeigt sie als "nicht verbunden").
+    """
+    changed = False
+    missing = [c for c in cams if not any(_same(c["device"], d["dev"]) for d in devices)]
+    free = [d for d in devices if not any(_same(c["device"], d["dev"]) for c in cams)]
+    if len(missing) == 1 and len(free) == 1 and devices:
+        missing[0]["device"] = free[0]["dev"]
+        changed = True
+    for cam in cams:
+        dev = next((d for d in devices if _same(cam["device"], d["dev"])), None)
+        if not dev or cam["size"] in dev["formats"].get(cam["format"], {}):
+            continue
+        fmt, size = choose(dev["formats"])
+        if fmt:
+            fps_list = dev["formats"][fmt].get(size) or []
+            cam.update(format=fmt, size=size, fps=min(fps_list[0], 30) if fps_list else cam["fps"])
+            changed = True
+    return changed
+
+
+def pin_mac(cams, fresh=False):
+    """Vergibt der ersten Kamera einmalig ihre MAC. Gibt True zurück, wenn geändert.
+
+    Neue Installation: MAC der fest verbauten Schnittstelle. Bestehende Installation:
+    die MAC der gerade aktiven Schnittstelle – darunter kennt Home Assistant das Gerät.
+    """
+    changed = False
+    for cam in cams:
+        if cam.get("mac"):
+            continue
+        if cam["id"] == STREAM_NAME:
+            mac = builtin_mac() if fresh else primary_mac()
+        else:
+            mac = synthetic_mac(cam["id"])
+        if mac:
+            cam["mac"] = mac
+            changed = True
+    return changed
+
+
+def overview(cams=None, devices=None):
+    """Für die Oberfläche: eingerichtete Kameras (mit Zustand) + neu erkannte Geräte."""
+    cams = load_cameras() if cams is None else cams
+    devices = list_devices() if devices is None else devices
+    items = []
+    for cam in cams:
+        dev = next((d for d in devices if _same(cam["device"], d["dev"])), None)
+        items.append(dict(cam, present=bool(dev), new=False,
+                          label=dev["label"] if dev else camera_label(cam["device"]),
+                          formats=dev["formats"] if dev else {},
+                          mic=bool(dev and dev.get("mic"))))
+    known = list(cams)
+    for dev in devices:
+        if any(_same(c["device"], dev["dev"]) for c in cams):
+            continue
+        cam = new_camera(known, dev)
+        known.append(cam)
+        items.append(dict(cam, enabled=False, present=True, new=True,
+                          label=dev["label"], formats=dev["formats"], mic=bool(dev.get("mic"))))
+    return items
+
+
+# --------------------------------------------------------------------------- go2rtc
+def rotation(cam):
+    r = _int(cam.get("rotate"), 0)
     return r if r in ROTATIONS else 0
 
 
-def output_size(conf):
+def output_size(cam):
     """Breite, Höhe des Videos nach der Drehung (Hochformat tauscht beides)."""
-    w, _, h = (conf.get("VIDEO_SIZE") or "1280x720").partition("x")
+    w, _, h = (cam.get("size") or "1280x720").partition("x")
     w, h = w or "1280", h or "720"
-    return (h, w) if rotation(conf) in (90, 270) else (w, h)
+    return (h, w) if rotation(cam) in (90, 270) else (w, h)
 
 
-FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-
-
-def time_overlay(conf):
+def time_overlay(cam):
     """ffmpeg-drawtext: Datum + Uhrzeit (Ortszeit des Pi) unten rechts, halbtransparent hinterlegt."""
-    w, h = output_size(conf)
+    w, h = output_size(cam)
     size = max(12, min(int(w), int(h)) // 28)  # 720p -> 25 px, wächst mit der Auflösung
     margin = size * 2 // 3
     return (f"fontfile={FONT}:fontsize={size}:fontcolor=white"
@@ -154,18 +377,27 @@ def time_overlay(conf):
             r":text='%{localtime\:%d.%m.%Y %X}'")  # %X = HH:MM:SS, ':' im Format wäre zu escapen
 
 
-def render(conf):
-    dev = conf.get("VIDEO_DEVICE") or "/dev/video0"
-    fmt = conf.get("VIDEO_FORMAT") or "mjpeg"
-    size = conf.get("VIDEO_SIZE") or "1280x720"
-    fps = conf.get("FRAMERATE") or "15"
-    bitrate = conf.get("BITRATE") or "2500k"
-    hw = conf.get("HW_ENCODE", "1") == "1"
-    rotate = rotation(conf)
-    overlay = conf.get("OVERLAY_TIME", "1") == "1"
-    query = f"video={dev}&input_format={fmt}&video_size={size}&framerate={fps}"
+def sub_size(cam):
+    """Breite, Höhe des Zweitstreams (gleiches Seitenverhältnis, gerade Werte)."""
+    w, h = (int(v) for v in output_size(cam))
+    if w <= SUB_WIDTH:
+        return w, h
+    return SUB_WIDTH, max(2, int(round(SUB_WIDTH * h / w / 2)) * 2)
 
-    if fmt == "h264" and not rotate and not overlay:
+
+def sub_id(cam):
+    return cam["id"] + "_sub"
+
+
+def stream_source(cam, hw):
+    if cam.get("privacy"):
+        # Privatzonen müssen VOR dem Kodieren ins Bild – das kann go2rtcs ffmpeg-Vorlage
+        # nicht, deshalb baut onvipi_stream.py den ffmpeg-Aufruf selbst (immer Software).
+        return f"exec:/usr/bin/python3 {STREAM_HELPER} video {cam['id']} {{output}}"
+    query = (f"video={cam['device'] or '/dev/video0'}&input_format={cam['format']}"
+             f"&video_size={cam['size']}&framerate={cam['fps']}")
+    rotate, overlay = rotation(cam), cam.get("overlay")
+    if cam["format"] == "h264" and not rotate and not overlay:
         source = f"v4l2:device?{query}"          # Kamera liefert schon H.264
     elif hw:
         # Hardware-Encoder (v4l2m2m) spart CPU, erzeugt aber einen H264-Bitstrom, an dem
@@ -177,7 +409,15 @@ def render(conf):
     if rotate:
         source += f"#rotate={rotate}"  # go2rtc dreht per ffmpeg-transpose (H.264-Kameras: neu kodiert)
     if overlay:
-        source += "#drawtext=" + time_overlay(conf)  # go2rtc zeichnet nach der Drehung
+        source += "#drawtext=" + time_overlay(cam)  # go2rtc zeichnet nach der Drehung
+    return source
+
+
+def render(conf, cams):
+    bitrate = conf.get("BITRATE") or "2500k"
+    hw = conf.get("HW_ENCODE", "1") == "1"
+    active = [c for c in cams if c["enabled"]]
+    gop = (active[0]["fps"] if active else 15) * 2
 
     cfg = {
         "api": {"listen": ":1984"},
@@ -187,24 +427,70 @@ def render(conf):
         "webrtc": {"listen": ":8555"},
         "ffmpeg": {
             # Pi-4-Hardware-Encoder: Pixelformat und Bitrate sind wichtig für ein sauberes Bild
-            "h264/v4l2m2m": f"-c:v h264_v4l2m2m -g {int(fps) * 2} -bf 0 -b:v {bitrate} -pix_fmt:v yuv420p",
+            "h264/v4l2m2m": f"-c:v h264_v4l2m2m -g {gop} -bf 0 -b:v {bitrate} -pix_fmt:v yuv420p",
         },
-        "streams": {STREAM_NAME: source},
+        "streams": {},
         "log": {"level": "info"},
     }
+    for c in active:
+        sources = [stream_source(c, hw)]
+        if c.get("audio") and microphone_of(c["device"]):
+            # zweite Quelle = Ton; go2rtc führt Video und Ton zu einem Stream zusammen
+            sources.append(f"exec:/usr/bin/python3 {STREAM_HELPER} audio {c['id']} {{output}}")
+        cfg["streams"][c["id"]] = sources if len(sources) > 1 else sources[0]
+        if c.get("substream"):
+            w, h = sub_size(c)
+            # läuft nur, solange ihn jemand abruft (neu kodiert aus dem Hauptstream)
+            cfg["streams"][sub_id(c)] = (
+                f"ffmpeg:{c['id']}#video=h264#width={w}#height={h}"
+                + ("#audio=copy" if len(sources) > 1 else ""))
     if not cfg["rtsp"]["password"]:
         del cfg["rtsp"]["username"], cfg["rtsp"]["password"]
 
     # JSON ist gültiges YAML – so gibt es keine Quoting-Probleme mit Passwörtern
     tmp = GO2RTC_YAML + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        f.write("# Generated from onvipi.conf – please make changes there\n")
+        f.write("# Generated from onvipi.conf and cameras.json – please make changes there\n")
         json.dump(cfg, f, indent=2)
         f.write("\n")
     os.chmod(tmp, 0o640)
     set_group(tmp)
     os.replace(tmp, GO2RTC_YAML)
     return cfg
+
+
+# --------------------------------------------------------------------------- Befehle
+def detect(conf):
+    """Neue Installation: jede angeschlossene Webcam wird eine aktive Kamera."""
+    cams = []
+    for dev in list_devices()[:MAX_CAMERAS]:
+        cam = new_camera(cams, dev, conf)
+        cams.append(cam)
+        print(f"Webcam: {cam['device']}  format: {cam['format']}  "
+              f"resolution: {cam['size']}  frame rate: {cam['fps']}")
+    if not cams:
+        print("WARNING: no USB webcam found – plug one in and enable it on the settings page.")
+    pin_mac(cams, fresh=True)
+    save_cameras(cams)
+    return cams
+
+
+def ensure(conf):
+    """Bei jedem Start: Liste anlegen (Update von < 2.1), Webcam-Tausch erkennen, MAC vergeben."""
+    stored = os.path.exists(CAMERAS)
+    cams = load_cameras(conf)
+    devices = list_devices()
+    changed = not stored
+    if not cams and devices:   # bisher keine Webcam gefunden, jetzt steckt eine
+        cams = [new_camera([], devices[0], conf)]
+        changed = True
+    if reconcile(cams, devices):
+        print("Webcam changed – camera list updated")
+        changed = True
+    changed = pin_mac(cams) or changed
+    if changed:
+        save_cameras(cams)
+    return cams
 
 
 def main():
@@ -215,23 +501,13 @@ def main():
     args = ap.parse_args()
     conf = load_conf(CONF)
 
-    if args.ensure and not args.detect and needs_detect(conf):
-        print(f"Webcam {conf.get('VIDEO_DEVICE') or '?'} not available – detecting again")
-        args.detect = True
+    cams = None
     if args.detect:
-        dev, fmt, size, fps = detect()
-        if not dev:
-            print("WARNING: no USB webcam found – keeping the current settings.")
-        else:
-            info = f"Webcam: {dev}  format: {fmt}  resolution: {size}"
-            conf.update(VIDEO_DEVICE=dev, VIDEO_FORMAT=fmt, VIDEO_SIZE=size)
-            if fps:
-                conf["FRAMERATE"] = str(fps)
-                info += f"  frame rate: {fps}"
-            print(info)
-            save_conf(CONF, conf)
+        cams = detect(conf)
+    elif args.ensure:
+        cams = ensure(conf)
     if args.render:
-        render(conf)
+        render(conf, load_cameras(conf) if cams is None else cams)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 """Gemeinsame Hilfsfunktionen für die OnviPi-Dienste."""
+import json
 import os
 import re
 import shlex
@@ -10,6 +11,7 @@ CONF_DIR = os.environ.get("ONVIPI_CONF_DIR", "/etc/onvipi")
 CONF = os.path.join(CONF_DIR, "onvipi.conf")
 MQTT_CONF = os.path.join(CONF_DIR, "mqtt.conf")
 GO2RTC_YAML = os.path.join(CONF_DIR, "go2rtc.yaml")
+CAMERAS = os.path.join(CONF_DIR, "cameras.json")   # eine Kamera je Eintrag (onvipi_camera)
 STREAM_NAME = "onvipi"
 
 
@@ -36,6 +38,24 @@ def save_conf(path, data, mode=0o640):
         f.write("# managed by OnviPi – manual changes are kept\n")
         for key, value in data.items():
             f.write(f"{key}={shlex.quote(str(value))}\n")
+    os.chmod(tmp, mode)
+    set_group(tmp)
+    os.replace(tmp, path)
+
+
+def load_json(path, default=None):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def save_json(path, data, mode=0o640):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
     os.chmod(tmp, mode)
     set_group(tmp)
     os.replace(tmp, path)
@@ -92,15 +112,24 @@ def primary_interface():
     return None
 
 
-def primary_mac():
-    """MAC-Adresse der Standard-Schnittstelle, z. B. 'dc:a6:32:01:02:03' (oder None)."""
-    iface = primary_interface()
+def interface_mac(iface):
+    """MAC-Adresse einer Schnittstelle, z. B. 'dc:a6:32:01:02:03' (oder None)."""
     try:
         with open(f"/sys/class/net/{iface}/address") as f:
             mac = f.read().strip().lower()
     except (OSError, TypeError):
         return None
     return mac if re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac) else None
+
+
+def primary_mac():
+    """MAC-Adresse der Standard-Schnittstelle (oder None)."""
+    return interface_mac(primary_interface())
+
+
+def builtin_mac():
+    """MAC der fest verbauten Schnittstelle – ändert sich nicht mit dem aktiven Netz."""
+    return interface_mac("eth0") or interface_mac("wlan0")
 
 
 def ipv4_addresses():

@@ -1,0 +1,14 @@
+[Unit]
+Description=OnviPi recording to USB storage or SD card
+After=onvipi-go2rtc.service local-fs.target
+Wants=onvipi-go2rtc.service
+
+[Service]
+# root: mounts the USB storage. Does nothing while recording is switched off.
+ExecStart=/usr/bin/python3 /opt/onvipi/onvipi_record.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

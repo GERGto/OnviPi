@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""WS-Discovery-Responder für den ONVIF-Server von go2rtc.
+"""WS-Discovery-Responder für den ONVIF-Server (onvipi_onvif).
 
-go2rtc beantwortet ONVIF-Anfragen, aber keine Discovery-Probes. Dieser kleine
-Dienst antwortet auf Multicast-Probes (239.255.255.250:3702), damit Home
-Assistant ("ONVIF hinzufügen") und andere ONVIF-Clients die Kamera finden.
+Dieser kleine Dienst antwortet auf Multicast-Probes (239.255.255.250:3702), damit Home
+Assistant ("ONVIF hinzufügen") und andere ONVIF-Clients die Kameras finden. Jede aktive
+Kamera aus cameras.json wird als eigenes Gerät gemeldet.
 """
 import logging
 import os
@@ -16,7 +16,8 @@ import time
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from onvipilib import CONF, device_id, ipv4_addresses, load_conf, primary_mac  # noqa: E402
+from onvipilib import ipv4_addresses  # noqa: E402
+from onvipi_camera import camera_uuid, effective_mac, load_cameras  # noqa: E402
 
 MCAST_GRP = "239.255.255.250"
 PORT = int(os.environ.get("ONVIPI_WSD_PORT", "3702"))
@@ -55,21 +56,7 @@ def tag_text(xml, name):
 
 class Responder:
     def __init__(self):
-        conf = load_conf(CONF)
-        self.port = int(conf.get("ONVIF_PORT", "8000"))  # eigener ONVIF-Server (onvipi_onvif)
-        name = re.sub(r"[^A-Za-z0-9_.-]+", "_", conf.get("CAM_NAME", "OnviPi")) or "OnviPi"
-        scopes = [
-            "onvif://www.onvif.org/Profile/Streaming",
-            "onvif://www.onvif.org/type/video_encoder",
-            "onvif://www.onvif.org/type/Network_Video_Transmitter",
-            f"onvif://www.onvif.org/name/{name}",
-            "onvif://www.onvif.org/hardware/RaspberryPi",
-        ]
-        mac = primary_mac()
-        if mac:  # HA übernimmt die MAC als ID → bereits eingerichtete Kamera wird ausgeblendet
-            scopes.append(f"onvif://www.onvif.org/MAC/{mac}")
-        self.scopes = " ".join(scopes)
-        self.dev = device_id()
+        self.cams = [c for c in load_cameras() if c["enabled"]]
         self.instance = int(time.time())
         self.number = 0
         self.joined = set()
@@ -103,17 +90,34 @@ class Responder:
             relates=f"\n<a:RelatesTo>{relates}</a:RelatesTo>" if relates else "",
         ).encode()
 
-    def match(self, tag, ip):
-        xaddrs = f"http://{ip}:{self.port}/onvif/device_service"
-        return MATCH.format(tag=tag, dev=self.dev, scopes=self.scopes, xaddrs=xaddrs)
+    @staticmethod
+    def scopes(cam):
+        name = re.sub(r"[^A-Za-z0-9_.-]+", "_", cam["name"]) or "OnviPi"
+        scopes = [
+            "onvif://www.onvif.org/Profile/Streaming",
+            "onvif://www.onvif.org/type/video_encoder",
+            "onvif://www.onvif.org/type/Network_Video_Transmitter",
+            f"onvif://www.onvif.org/name/{name}",
+            "onvif://www.onvif.org/hardware/RaspberryPi",
+        ]
+        mac = effective_mac(cam)
+        if mac:  # HA übernimmt die MAC als ID → bereits eingerichtete Kamera wird ausgeblendet
+            scopes.append(f"onvif://www.onvif.org/MAC/{mac}")
+        return " ".join(scopes)
+
+    def match(self, tag, ip, cam):
+        xaddrs = f"http://{ip}:{cam['port']}/onvif/device_service"
+        return MATCH.format(tag=tag, dev=camera_uuid(cam), scopes=self.scopes(cam),
+                            xaddrs=xaddrs)
 
     def hello(self, ip):
         if ip == "0.0.0.0":
             return
-        msg = self.message(ACTION_HELLO, self.match("Hello", ip), to=DISCOVERY_TO)
         try:
             self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(ip))
-            self.sock.sendto(msg, (MCAST_GRP, PORT))
+            for cam in self.cams:
+                msg = self.message(ACTION_HELLO, self.match("Hello", ip, cam), to=DISCOVERY_TO)
+                self.sock.sendto(msg, (MCAST_GRP, PORT))
         except OSError as e:
             log.debug("Hello on %s failed: %s", ip, e)
 
@@ -136,12 +140,13 @@ class Responder:
 
     def handle(self, data, peer):
         xml = data.decode("utf-8", "replace")
-        if tag_text(xml, "Action") != ACTION_PROBE or not self.wants_us(xml):
+        if (tag_text(xml, "Action") != ACTION_PROBE or not self.wants_us(xml)
+                or not self.cams):
             return
         msg_id = tag_text(xml, "MessageID")
         ip = self.local_ip_for(peer[0])
-        reply = self.message(ACTION_MATCHES,
-                             "<d:ProbeMatches>%s</d:ProbeMatches>" % self.match("ProbeMatch", ip),
+        matches = "".join(self.match("ProbeMatch", ip, cam) for cam in self.cams)
+        reply = self.message(ACTION_MATCHES, f"<d:ProbeMatches>{matches}</d:ProbeMatches>",
                              relates=msg_id)
         time.sleep(random.uniform(0, 0.3))  # laut Spezifikation leicht verzögert antworten
         self.sock.sendto(reply, peer)

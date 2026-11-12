@@ -5,9 +5,10 @@
 #   Package:        called by install.sh, optionally with the camera name as argument
 #
 # Creates everything that must be unique per device: SSH host keys, hostname,
-# camera password, setup hotspot name and the webcam detection.
-# User, password, SSH, Wi-Fi country and time zone are set afterwards in the
-# setup wizard (hotspot).
+# setup hotspot name and the webcam detection (cameras.json).
+# OnviPiOS: the account (username + password) is created afterwards in the setup wizard;
+# CAM_PASSWORD below is only a random placeholder until then.
+# Package: the generated CAM_PASSWORD is the password for the web interface and ONVIF.
 set -euo pipefail
 
 NAME="$(printf '%s' "${1:-OnviPi}" | tr -d "'\"\\\\\`\$")"
@@ -87,16 +88,8 @@ AP_SSID='OnviPi-Setup-${AP_SUFFIX}'
 AP_PASSWORD=''
 WIFI_IFACE='wlan0'
 ONVIF_PORT='8000'
-VIDEO_DEVICE='/dev/video0'
-VIDEO_FORMAT='mjpeg'
-VIDEO_SIZE='1280x720'
-FRAMERATE='15'
 BITRATE='2500k'
 HW_ENCODE='0'
-ROTATE='0'
-OVERLAY_TIME='1'
-MOTION_ENABLE='1'
-MOTION_SENSITIVITY='60'
 MOTION_FPS='5'
 MOTION_COOLDOWN='8'
 EOF
@@ -106,9 +99,10 @@ fi
 chown root:onvipi "$CONF"
 chmod 640 "$CONF"
 
-# Webcam: full detection for a new configuration, otherwise only check that it still fits.
-# (At boot the webcam may not be ready yet – go2rtc checks again on every start.)
-say "Detecting webcam"
+# Webcams: full detection for a new configuration (every webcam becomes a camera),
+# otherwise only check that the configured ones still fit.
+# (At boot a webcam may not be ready yet – go2rtc checks again on every start.)
+say "Detecting webcams"
 if [ "$NEW" = 1 ]; then
   python3 /opt/onvipi/onvipi_camera.py --detect --render
 else
