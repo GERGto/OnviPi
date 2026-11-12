@@ -57,7 +57,6 @@ cat <<EOF
 ────────────────────────────────────────────────────────────
  Settings:             http://$(hostname).local   (or http://$IP)
    Password: $CAM_PASSWORD        (change it under System)
- Live view (browser):  http://$(hostname).local:1984   (or http://$IP:1984)
  RTSP:                 rtsp://$CAM_USER:$CAM_PASSWORD@$IP:8554/onvipi
 
  Home Assistant → Settings → Devices & services → Add integration → ONVIF

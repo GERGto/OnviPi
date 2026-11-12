@@ -206,15 +206,24 @@ def clean_zones(zones):
 
 
 def normalize(cam):
-    """Füllt fehlende Felder und begrenzt Werte – die Datei darf von Hand bearbeitet werden."""
+    """Füllt fehlende Felder und begrenzt Werte – die Datei darf von Hand bearbeitet werden.
+
+    Gerät, Format und Auflösung landen in der go2rtc-Quelle bzw. im ffmpeg-Aufruf. Sie werden
+    deshalb streng geprüft, auch wenn sie aus einer eingespielten Sicherung stammen.
+    """
     rot = _int(cam.get("rotate"), 0)
+    cam_id = str(cam.get("id") or STREAM_NAME)
+    device = str(cam.get("device") or "")
+    fmt, size = str(cam.get("format") or "mjpeg"), str(cam.get("size") or "1280x720")
     return {
-        "id": str(cam.get("id") or STREAM_NAME),
-        "name": (str(cam.get("name") or "").strip() or "OnviPi")[:48],
+        "id": cam_id if re.fullmatch(r"[a-z0-9]{1,16}", cam_id) else STREAM_NAME,
+        "name": (re.sub(r"[\x00-\x1f'\"\\`$<>&]", "", str(cam.get("name") or "")).strip()
+                 or "OnviPi")[:48],
         "enabled": bool(cam.get("enabled", True)),
-        "device": str(cam.get("device") or ""),
-        "format": str(cam.get("format") or "mjpeg"),
-        "size": str(cam.get("size") or "1280x720"),
+        "device": device if re.fullmatch(r"/dev/[A-Za-z0-9_./:+-]{1,200}", device)
+        and ".." not in device else "",
+        "format": fmt if fmt in FOURCC.values() else "mjpeg",
+        "size": size if re.fullmatch(r"\d{2,5}x\d{2,5}", size) else "1280x720",
         "fps": max(1, min(60, _int(cam.get("fps"), 15))),
         "rotate": rot if rot in ROTATIONS else 0,
         "overlay": bool(cam.get("overlay", True)),
@@ -420,7 +429,10 @@ def render(conf, cams):
     gop = (active[0]["fps"] if active else 15) * 2
 
     cfg = {
-        "api": {"listen": ":1984"},
+        # go2rtcs API hat kein Passwort und kann Streams mit beliebigen Befehlen anlegen –
+        # deshalb nur lokal. Livebild und Standbilder reichen onvipi_web (/live/) und
+        # onvipi_onvif (/snapshot.jpg) mit Anmeldung durch. GO2RTC_LAN='1' öffnet sie wieder.
+        "api": {"listen": ":1984" if conf.get("GO2RTC_LAN") == "1" else "127.0.0.1:1984"},
         "rtsp": {"listen": ":8554",
                  "username": conf.get("CAM_USER", "admin"),
                  "password": conf.get("CAM_PASSWORD", "")},

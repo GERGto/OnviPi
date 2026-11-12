@@ -115,7 +115,9 @@ def run_setup(app, job):
         app.setup_progress = {"phase": "failed", "error": err}
         return False
     conf = load_conf(CONF)
-    conf.update(CAM_USER=job["user"], CAM_PASSWORD=job["password"], LOGIN_USER=job["user"])
+    conf.update(CAM_USER=job["user"], CAM_PASSWORD=job["password"], LOGIN_USER=job["user"],
+                UPDATE_CHECK="1" if job.get("update_check", True) else "0",
+                UPDATE_AUTO="1" if job.get("update_install", True) else "0")
     save_conf(CONF, conf)
     app.setup_draft = {}
     log.info("Setup finished: account '%s' created, %s", job["user"],
@@ -129,6 +131,7 @@ def run_setup(app, job):
 def setup_mode(app):
     """Kein Konto: Assistent anbieten, bis er abgeschlossen ist."""
     net = app.net
+    net.ap_password = load_conf(CONF).get("AP_PASSWORD", "")   # offen, solange nichts gesetzt ist
     net.refresh()
     # Trägt das Hotspot-Gerät gerade das Heimnetz (Passwort zurückgesetzt), bleibt es
     # verbunden – der Assistent ist dann über das LAN erreichbar.
@@ -156,8 +159,16 @@ def setup_mode(app):
 
 # --------------------------------------------------------------------------- Netz verloren
 def recovery_mode(app, until_online=True):
-    """Eingerichtet, aber ohne Netz: Hotspot mit der normalen Oberfläche (Anmeldung)."""
+    """Eingerichtet, aber ohne Netz: Hotspot mit der normalen Oberfläche (Anmeldung).
+
+    Der Hotspot ist jetzt mit WPA2 verschlüsselt, Schlüssel = Passwort des Kontos (bzw.
+    AP_PASSWORD). In einem offenen WLAN könnte sonst jeder in Reichweite das Passwort
+    mitlesen, das der Besitzer auf der Anmeldeseite eintippt – und ein Angreifer kann den
+    Hotspot erzwingen, indem er das Heim-WLAN stört.
+    """
     net = app.net
+    conf = load_conf(CONF)
+    net.ap_password = conf.get("AP_PASSWORD") or conf.get("CAM_PASSWORD", "")[:63]
     start_hotspot(app)
     last_retry = time.time()
     try:

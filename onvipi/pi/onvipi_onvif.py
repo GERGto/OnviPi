@@ -35,6 +35,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from onvipilib import CONF, load_conf, primary_interface, primary_ip  # noqa: E402
@@ -441,8 +442,17 @@ class Onvif:
         return self._media_uri("GetStreamUri", f"rtsp://{self.ip()}:{RTSP_PORT}/{stream}")
 
     def GetSnapshotUri(self, _):
-        return self._media_uri("GetSnapshotUri",
-                               f"http://{self.ip()}:{GO2RTC_API}/api/frame.jpeg?src={self.id}")
+        # eigenes, passwortgeschütztes Standbild – go2rtcs API ist nur lokal erreichbar
+        return self._media_uri("GetSnapshotUri", f"http://{self.ip()}:{self.port}/snapshot.jpg")
+
+    def snapshot(self):
+        try:
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{GO2RTC_API}/api/frame.jpeg?src={self.id}", timeout=15) as r:
+                return r.read()
+        except OSError as ex:
+            log.debug("[%s] snapshot failed: %s", self.id, ex)
+            return None
 
     def GetServiceCapabilitiesMedia(self, _):
         return ("<trt:GetServiceCapabilitiesResponse><trt:Capabilities>"
@@ -560,6 +570,80 @@ def privileged(*args):
         log.warning("onvipi_priv %s failed: %s", args[0], ex)
 
 
+MAX_BODY = 256 * 1024     # größere Anfragen sind kein ONVIF
+HTTP_REALM = "OnviPi"
+NONCE_KEY = os.urandom(16)
+
+
+class Guard:
+    """Bremst Passwort-Raten: nach MAX Fehlversuchen einer Adresse ist sie LOCK Sekunden gesperrt."""
+    MAX, LOCK = 10, 300
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.fails = {}   # IP -> (Anzahl, Zeitpunkt des letzten)
+
+    def locked(self, ip):
+        with self.lock:
+            n, last = self.fails.get(ip, (0, 0))
+            if n and time.time() - last >= self.LOCK:
+                self.fails.pop(ip, None)
+                return False
+            return n >= self.MAX
+
+    def fail(self, ip):
+        with self.lock:
+            if len(self.fails) > 2000:
+                self.fails.clear()
+            self.fails[ip] = (self.fails.get(ip, (0, 0))[0] + 1, time.time())
+
+    def ok(self, ip):
+        with self.lock:
+            self.fails.pop(ip, None)
+
+
+GUARD = Guard()
+
+
+def new_nonce():
+    ts = str(int(time.time()))
+    return ts + "-" + hmac.new(NONCE_KEY, ts.encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def nonce_valid(nonce):
+    ts, _, mac = (nonce or "").partition("-")
+    good = hmac.new(NONCE_KEY, ts.encode(), hashlib.sha256).hexdigest()[:32]
+    return ts.isdigit() and hmac.compare_digest(mac, good) and time.time() - int(ts) < 300
+
+
+def http_authorized(header, method):
+    """HTTP-Anmeldung (Basic oder Digest) für das Standbild – Home Assistant probiert beides."""
+    conf = load_conf(CONF)
+    user, pw = conf.get("CAM_USER", "admin"), conf.get("CAM_PASSWORD", "")
+    if not pw:
+        return True
+    kind, _, rest = (header or "").partition(" ")
+    if kind.lower() == "basic":
+        try:
+            got_user, _, got_pw = base64.b64decode(rest).decode().partition(":")
+        except (ValueError, UnicodeDecodeError):
+            return False
+        return hmac.compare_digest(f"{got_user}:{got_pw}".encode(), f"{user}:{pw}".encode())
+    if kind.lower() == "digest":
+        f = {k.lower(): (a or b) for k, a, b in re.findall(r'(\w+)=(?:"([^"]*)"|([^,\s]+))', rest)}
+        if f.get("username") != user or not nonce_valid(f.get("nonce")):
+            return False
+        md5 = lambda text: hashlib.md5(text.encode()).hexdigest()  # noqa: E731
+        ha1 = md5(f"{user}:{f.get('realm', HTTP_REALM)}:{pw}")
+        ha2 = md5(f"{method}:{f.get('uri', '')}")
+        if f.get("qop"):
+            want = md5(f"{ha1}:{f['nonce']}:{f.get('nc', '')}:{f.get('cnonce', '')}:{f['qop']}:{ha2}")
+        else:
+            want = md5(f"{ha1}:{f['nonce']}:{ha2}")
+        return hmac.compare_digest(f.get("response", ""), want)
+    return False
+
+
 def find_op(body, allowed):
     for m in OP_RE.finditer(body):
         if m.group(1) in allowed:
@@ -643,18 +727,29 @@ def serve(onvif):
             return op, (getattr(onvif, op, None) if op else None), False
 
         def do_POST(self):
-            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if not 0 <= length <= MAX_BODY:
+                self.close_connection = True
+                return self._send(fault("Request too large"), 413)
             body = self.rfile.read(length).decode("utf-8", "replace") if length else ""
             parts = urllib.parse.urlparse(self.path)
+            ip = self.client_address[0]
             op, fn, needs_idx = self._resolve(parts.path, body)
             if not fn:
                 log.warning("Unknown ONVIF operation on %s: %r", parts.path, body[:120])
                 # ONVIF-Standardtext: Clients (u. a. HA) erkennen daran "optional, fehlt"
                 return self._send(fault("Optional Action Not Implemented"), 500)
-            if op not in PRE_AUTH_OPS and not authorized(body):
-                log.warning("ONVIF %s from %s rejected: wrong credentials", op,
-                            self.client_address[0])
-                return self._send(fault("Sender not Authorized"), 400)
+            if op not in PRE_AUTH_OPS:
+                if GUARD.locked(ip):   # zu viele Fehlversuche: nicht einmal mehr prüfen
+                    return self._send(fault("Sender not Authorized"), 400)
+                if not authorized(body):
+                    GUARD.fail(ip)
+                    log.warning("ONVIF %s from %s rejected: wrong credentials", op, ip)
+                    return self._send(fault("Sender not Authorized"), 400)
+                GUARD.ok(ip)
             try:
                 if needs_idx:
                     idx = int(urllib.parse.parse_qs(parts.query).get("idx", ["0"])[0])
@@ -669,7 +764,43 @@ def serve(onvif):
                 log.exception("Error in %s", op)
                 return self._send(fault("Internal error"), 500)
 
+        def _plain(self, code, body=b"", ctype="text/plain", headers=()):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            for key, value in headers:
+                self.send_header(key, value)
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def snapshot(self):
+            """Standbild der Kamera – nur mit Benutzername und Passwort (Basic oder Digest)."""
+            ip = self.client_address[0]
+            if GUARD.locked(ip):
+                return self._plain(429, b"Too many failed attempts.\n")
+            header = self.headers.get("Authorization")
+            if not http_authorized(header, self.command):
+                if header:
+                    GUARD.fail(ip)
+                    log.warning("Snapshot request from %s rejected: wrong credentials", ip)
+                return self._plain(401, b"Login required.\n", headers=(
+                    ("WWW-Authenticate", f'Digest realm="{HTTP_REALM}", qop="auth", '
+                                         f'nonce="{new_nonce()}", algorithm=MD5'),
+                    ("WWW-Authenticate", f'Basic realm="{HTTP_REALM}", charset="UTF-8"')))
+            GUARD.ok(ip)
+            img = onvif.snapshot()
+            if not img:
+                return self._plain(503, b"No picture available.\n")
+            self._plain(200, img, "image/jpeg")
+
+        def do_HEAD(self):
+            self.do_GET()
+
         def do_GET(self):
+            if urllib.parse.urlparse(self.path).path == "/snapshot.jpg":
+                return self.snapshot()
             # Home Assistant verlinkt auf der Geräteseite ("Visit") http://<ip>:<onvif-port>
             # -> zur Einstellungsseite weiterleiten.
             host = (self.headers.get("Host") or onvif.ip()).rsplit(":", 1)[0]

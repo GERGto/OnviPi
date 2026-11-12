@@ -3,6 +3,35 @@
 All notable changes to OnviPi. Downloads are available under
 [Releases](https://github.com/GERGto/OnviPi/releases).
 
+## [2.3] – 2026-11-12
+
+### Security
+- **go2rtc's management interface (port 1984) is no longer reachable from the network.** It
+  has no password and can start arbitrary commands, so anyone in the home network could have
+  taken over the device. Live view and snapshots now go through OnviPi with login.
+- **Snapshots need the password** (HTTP Basic or Digest, served on the ONVIF port).
+- **The hotspot of a set-up device is WPA2-encrypted** with the account password. Before, the
+  login on the open hotspot could be read by anyone in range.
+- **Lock-out for ONVIF and snapshots:** 10 wrong passwords lock the address for 5 minutes.
+- **DNS-rebinding protection:** the web interface only answers under the device's own
+  addresses (IP, `<name>.local`, common router domains, `TRUSTED_HOSTS`).
+- Content-Security-Policy for all pages, connection time-outs, size limit for ONVIF requests.
+- Camera settings from a restored backup are validated strictly before they reach go2rtc.
+- go2rtc and the discovery service can no longer gain privileges or read home directories.
+
+### Added
+- **Wizard step “Updates”** with two switches, both on by default: look for updates
+  automatically, and install them automatically. The page *Updates* has the same two switches.
+
+### Changed
+- README: security section rewritten with the protections and the known limits.
+
+### Upgrade notes
+- Home Assistant: choose *Reconfigure* on the ONVIF device once so that it picks up the new
+  snapshot address. Live view and motion sensor are not affected.
+- If you opened `http://<pi>:1984` directly: use the live view of the web interface, or set
+  `GO2RTC_LAN='1'` in `onvipi.conf` to open the port again (not recommended).
+
 ## [2.2] – 2026-11-12
 
 ### Changed

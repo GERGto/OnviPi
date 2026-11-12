@@ -744,14 +744,18 @@ async function pageUpdates(rerender) {
   const checked = h("dd", {}, when(st.last_check));
   const last = st.last_update;
 
-  const auto = toggle("Install updates automatically", u.auto, (e) => {
-    const want = e.target.checked;
-    api("system/update/auto", { enable: want }).then((r) => {
-      e.target.checked = r.auto;
-      toast(r.auto ? "Automatic updates are on." : "Automatic updates are off.");
+  const saveAuto = (checkOn, installOn, input, old) => {
+    api("system/update/auto", { check: checkOn, install: installOn }).then(() => {
+      toast("Saved.");
       rerender();
-    }, (err) => { e.target.checked = !want; toast(err.message, "error"); });
-  });
+    }, (err) => { input.checked = old; toast(err.message, "error"); });
+  };
+  const autoCheck = toggle("Look for updates automatically", u.auto_check,
+    (e) => saveAuto(e.target.checked, e.target.checked && u.auto, e.target, u.auto_check));
+  const auto = toggle("Install updates automatically", u.auto,
+    (e) => saveAuto(true, e.target.checked, e.target, u.auto));
+  auto.input.disabled = !u.auto_check;
+  if (!u.auto_check) auto.style.opacity = ".5";
 
   return [
     pageHead("Updates", "Keep the camera secure and up to date."),
@@ -766,10 +770,14 @@ async function pageUpdates(rerender) {
           : h("span", {}, h("span", { class: "badge error" }, "Failed"), ` ${when(last.time)} – ${last.error || "see the log"}`)) : null)),
     h("div", { class: "card" },
       h("div", { class: "card-head" }, h("h2", {}, "Automatic updates")),
+      h("div", { class: "field" }, autoCheck,
+        h("div", { class: "hint" }, u.auto_check
+          ? "Every night between 3:00 and 4:30 the camera asks GitHub whether there is a new version."
+          : "Switched off. The camera never contacts the internet on its own – look for updates yourself from time to time.")),
       h("div", { class: "field" }, auto,
         h("div", { class: "hint" }, u.auto
-          ? "Every night between 3:00 and 4:30 the camera looks for a new version and installs it. Picture and recording are interrupted for a few minutes."
-          : "Switched off. The camera does not look for updates by itself and never contacts the internet on its own.")),
+          ? "A new version is installed the same night. Picture and recording pause for a few minutes."
+          : "New versions are only shown here and on the overview; you install them with one tap.")),
       h("ul", { class: "checklist small muted" },
         h("li", {}, icon("shield"), h("span", {}, "Updates come from the project’s releases on GitHub and are checked against the published checksum before installing.")),
         h("li", {}, icon("shield"), h("span", {}, "Your settings, cameras and recordings are kept.")),

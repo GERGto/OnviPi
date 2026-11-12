@@ -4,7 +4,7 @@
    everything else has a sensible default behind "More options". */
 "use strict";
 
-const STEPS = ["Welcome", "Camera", "Password", "Network", "Save your details"];
+const STEPS = ["Welcome", "Camera", "Password", "Network", "Updates", "Save your details"];
 const PASSWORD_RE = /^[A-Za-z0-9._~!*+=-]{8,64}$/;
 const root = document.getElementById("step");
 
@@ -13,6 +13,7 @@ let editors = [];          // camera forms of the current camera step
 const A = {                // answers
   user: "", password: "", timezone: "", country: "",
   useWifi: true, iface: "", ssid: "", psk: "", hidden: false, secure: true,
+  updCheck: true, updInstall: true,
 };
 
 let bar = null;            // buttons for the fixed action bar of the step being built
@@ -235,7 +236,7 @@ function stepNetwork(errorText) {
       msg = "No Wi-Fi adapter found. Please plug in a network cable and reload this page.";
     }
     if (msg) { clear(error, banner("error", msg)); window.scrollTo(0, 0); return; }
-    stepSave();
+    stepUpdates();
   } }, "Next");
 
   renderList();
@@ -261,7 +262,42 @@ function stepNetwork(errorText) {
     nav(stepPassword, next));
 }
 
-/* ------------------------------------------------------------------ 5 · Save details */
+/* ------------------------------------------------------------------ 5 · Updates */
+function stepUpdates() {
+  const note = h("div");
+  const install = toggle("Install updates automatically", A.updInstall, (e) => { A.updInstall = e.target.checked; sync(); });
+  const check = toggle("Look for updates automatically", A.updCheck, (e) => {
+    A.updCheck = e.target.checked;
+    if (!A.updCheck) A.updInstall = false;
+    sync();
+  });
+  const sync = () => {
+    install.input.checked = A.updCheck && A.updInstall;
+    install.input.disabled = !A.updCheck;
+    install.style.opacity = A.updCheck ? "" : ".5";
+    clear(note, !A.updCheck
+      ? banner("warn", h("b", {}, "The camera will not learn about security fixes by itself. "),
+        "Look for updates yourself from time to time on the page “Updates”.")
+      : !A.updInstall ? banner("info", "The settings page tells you when a new version is available; you install it with one tap.")
+        : null);
+  };
+  sync();
+  show(4,
+    h("div", { class: "card" },
+      h("div", { class: "hero" }, icon("shield")),
+      h("h1", { class: "center" }, "Keep the camera up to date"),
+      h("p", { class: "center muted" }, "Updates fix security problems and bring improvements. We recommend leaving both switched on."),
+      h("div", { class: "field" }, check,
+        h("div", { class: "hint" }, "Once a night the camera asks GitHub whether there is a new version. ",
+          "Nothing else is sent – this is the only time the camera connects to the internet.")),
+      h("div", { class: "field" }, install,
+        h("div", { class: "hint" }, "A new version is installed the same night. Picture and recording pause for a few minutes; your settings are kept.")),
+      note,
+      h("p", { class: "muted small" }, "You can change both later on the page “Updates”.")),
+    nav(() => stepNetwork(), h("button", { class: "btn", onclick: stepSave }, "Next")));
+}
+
+/* ------------------------------------------------------------------ 6 · Save details */
 function detailsText() {
   return [
     `OnviPi camera “${S.cameras.length ? editors[0].value().name : S.name}”`,
@@ -298,7 +334,7 @@ function stepSave() {
   const download = h("a", { class: "btn secondary small", download: "onvipi-access.txt",
     href: "data:text/plain;charset=utf-8," + encodeURIComponent(detailsText()) },
   icon("download"), "Save as file");
-  show(4,
+  show(5,
     h("div", { class: "page-head" },
       h("h1", {}, "Save your access details"),
       h("p", {}, "You need them to open the settings page and to add the camera to Home Assistant. ",
@@ -325,7 +361,7 @@ function stepSave() {
       h("label", { class: "check" }, check,
         h("span", {}, h("b", {}, "I have saved the username and password."), h("br"),
           h("span", { class: "muted small" }, "Without them you cannot open the settings later.")))),
-    nav(() => stepNetwork(), finish));
+    nav(stepUpdates, finish));
 }
 
 /* ------------------------------------------------------------------ Finish */
@@ -334,6 +370,7 @@ async function doFinish() {
   await api("setup/finish", {
     user: A.user, password: A.password, timezone: A.timezone, country: A.country,
     wifi: wifi ? { iface: A.iface, ssid: A.ssid, psk: A.psk, hidden: A.hidden } : null,
+    updates: { check: A.updCheck, install: A.updCheck && A.updInstall },
   });
   watchProgress(wifi && S.network.via_hotspot && !S.network.stays_connected);
 }

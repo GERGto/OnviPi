@@ -7,6 +7,10 @@ User=onvipi
 SupplementaryGroups=video audio
 ExecStartPre=+/usr/bin/python3 /opt/onvipi/onvipi_camera.py --ensure --render
 ExecStart=/usr/local/bin/go2rtc -config /etc/onvipi/go2rtc.yaml
+# no way back to root, no access to home directories, private /tmp
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
 Restart=always
 RestartSec=5
 

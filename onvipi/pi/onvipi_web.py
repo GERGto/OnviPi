@@ -56,6 +56,13 @@ MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=ut
 GO2RTC_PORT = 1984
 LIVE_RE = re.compile(r"/(stream\.html|video-rtc\.js|video-stream\.js|api/ws|api/webrtc|"
                      r"api/stream\.mp4|api/stream\.m3u8|api/hls/[\w.-]+|api/frame\.jpeg)")
+# Unter diesen Namen darf die Oberfläche angesprochen werden. Alles andere wird abgelehnt:
+# so kann keine fremde Webseite per DNS-Rebinding im Browser des Nutzers mit dem Gerät reden.
+LOCAL_SUFFIXES = (".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain", ".fritz.box",
+                  ".speedport.ip")
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+       "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-src 'self'; "
+       "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'")
 HOSTNAME_RE = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
 
 
@@ -116,6 +123,8 @@ class App:
                 self.sessions[token] = now + SESSION_TTL
             return token
         n = self.fails.get(ip, (0, 0))[0] + 1
+        if len(self.fails) > 2000:
+            self.fails.clear()   # Schutz vor Speicherfraß durch sehr viele Absender
         self.fails[ip] = (n, time.time())
         log.warning("Failed login from %s (%d)", ip, n)
         left = LOGIN_MAX_FAILS - n
@@ -294,8 +303,10 @@ class App:
             wifi = self.check_wifi(wifi)
         elif not netlib.ethernet_connected():
             raise ApiError("Please choose a Wi-Fi network or plug in a network cable.")
+        updates = data.get("updates") if isinstance(data.get("updates"), dict) else {}
         job = {"user": user, "password": password, "timezone": tz, "country": country,
-               "wifi": wifi}
+               "wifi": wifi, "update_check": bool(updates.get("check", True)),
+               "update_install": bool(updates.get("check", True) and updates.get("install", True))}
         with self.lock:
             self.setup_draft = dict(job, wifi={"ssid": wifi["ssid"], "iface": wifi["iface"]}
                                     if wifi else None)
@@ -362,6 +373,8 @@ class App:
 def make_handler(app):
     class Handler(http.server.BaseHTTPRequestHandler):
         server_version = "OnviPi"
+        sys_version = ""        # keine Python-Version verraten
+        timeout = 120           # hängende Verbindungen nicht ewig offen halten
 
         def log_message(self, fmt, *args):
             log.debug("http: " + fmt, *args)
@@ -397,7 +410,8 @@ def make_handler(app):
             headers = {}
             version = system.version()
             if ext == ".html":
-                headers = {"X-Frame-Options": "SAMEORIGIN", "Referrer-Policy": "same-origin"}
+                headers = {"X-Frame-Options": "SAMEORIGIN", "Referrer-Policy": "same-origin",
+                           "Content-Security-Policy": CSP}
                 # Skripte/Styles pro Version neu laden lassen (sonst alter Stand im Browser-Cache)
                 body = body.replace(b"?v=3", f"?v={urllib.parse.quote(version)}".encode())
             self.send(200, body, MIME.get(ext, "application/octet-stream"), headers,
@@ -430,6 +444,19 @@ def make_handler(app):
             src = self.headers.get("Origin") or self.headers.get("Referer") or ""
             return urllib.parse.urlparse(src).netloc == (self.headers.get("Host") or "")
 
+        def host_allowed(self):
+            host = (self.headers.get("Host") or "").lower()
+            host = host.rsplit(":", 1)[0] if not host.endswith("]") else host
+            if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", host) or host == "localhost":
+                return True
+            name = app.hostname().lower()
+            if host == name or (host.startswith(name + ".") and host.endswith(LOCAL_SUFFIXES)):
+                return True
+            if host.endswith(".local") and "." not in host[:-6]:
+                return True   # mDNS-Name (auch der alte, direkt nach einer Umbenennung)
+            extra = load_conf(CONF).get("TRUSTED_HOSTS", "").lower().replace(",", " ").split()
+            return host in extra
+
         def via_hotspot(self):
             return app.ap and self.client_address[0].startswith(netlib.AP_NET)
 
@@ -455,6 +482,9 @@ def make_handler(app):
             try:
                 if self.captive():
                     return self.redirect(f"http://{netlib.AP_IP}/")
+                if not self.host_allowed():
+                    return self.send(403, b"This address is not allowed. Open the camera by its IP "
+                                          b"address or as http://<name>.local\n", "text/plain")
                 if path.startswith("/api/"):
                     if method == "POST" and not self.same_origin():
                         raise ApiError("Forbidden.", 403)
@@ -909,14 +939,19 @@ def make_handler(app):
         # -- Update, Sicherung, Werksreset
         def api_get_system_update(self, _):
             self.json({"current": system.version(), "auto": update.auto_enabled(),
+                       "auto_check": update.check_enabled(),
                        "state": update.read_state(), "status": update.read_status()})
 
         def api_post_system_update_auto(self, data):
             conf = load_conf(CONF)
-            conf["UPDATE_AUTO"] = "1" if data.get("enable") else "0"
+            check = bool(data.get("check"))
+            install = check and bool(data.get("install"))
+            conf.update(UPDATE_CHECK="1" if check else "0", UPDATE_AUTO="1" if install else "0")
             save_conf(CONF, conf)
-            log.info("Automatic updates %s", "on" if data.get("enable") else "off")
-            self.json({"ok": True, "auto": update.auto_enabled()})
+            log.info("Updates: automatic check %s, automatic install %s",
+                     "on" if check else "off", "on" if install else "off")
+            self.json({"ok": True, "auto": update.auto_enabled(),
+                       "auto_check": update.check_enabled()})
 
         def api_post_system_update_check(self, _):
             try:
@@ -986,6 +1021,7 @@ def make_handler(app):
                 return self.send(503, b"Not ready yet - please reload.\n", "text/plain")
             self.close_connection = True
             client = self.connection
+            client.settimeout(None)   # Livebild/Terminal dürfen beliebig lange offen sein
             try:
                 head = [requestline]
                 for key, value in self.headers.items():

@@ -5,6 +5,10 @@ After=network.target onvipi-go2rtc.service
 [Service]
 User=onvipi
 ExecStart=/usr/bin/python3 /opt/onvipi/onvipi_wsd.py
+# no way back to root, no access to home directories, private /tmp
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
 Restart=always
 RestartSec=5
 

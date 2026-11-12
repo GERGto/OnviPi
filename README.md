@@ -44,7 +44,7 @@ Live view, motion sensor and local recording – no cloud, no subscription.
 | **SD card, power** | 8 GB or more; official USB-C power supply (5 V / 3 A) |
 | **Network** | Ethernet or Wi-Fi. USB Wi-Fi adapters work if Raspberry Pi OS has a driver. |
 | **Recording** *(optional)* | USB stick or SSD (ext4, exFAT, FAT32, NTFS – it is not formatted), or the SD card |
-| **Home Assistant** | current version, on the same network (multicast allowed, no guest Wi-Fi) |
+| **Home Assistant** *(optional)* | current version, on the same network (multicast allowed, no guest Wi-Fi) |
 
 One webcam at 1280×720 / 30 fps needs about one of the four CPU cores (software encoding); every
 further webcam about the same again. Two to three cameras are realistic. A heatsink is
@@ -81,14 +81,15 @@ Checksums: `SHA256SUMS` in each [release](https://github.com/GERGto/OnviPi/relea
 
 ## 3. Setup wizard
 
-Four short steps; everything else has a sensible default behind *More options*.
+Five short steps; everything else has a sensible default behind *More options*.
 
 <table>
   <tr>
-    <td valign="top"><img src="docs/screenshots/wizard-2-camera.png" alt="Wizard: camera" width="200"></td>
-    <td valign="top"><img src="docs/screenshots/wizard-3-password.png" alt="Wizard: password" width="200"></td>
-    <td valign="top"><img src="docs/screenshots/wizard-4-network.png" alt="Wizard: network" width="200"></td>
-    <td valign="top"><img src="docs/screenshots/wizard-5-save.png" alt="Wizard: save your details" width="200"></td>
+    <td valign="top"><img src="docs/screenshots/wizard-2-camera.png" alt="Wizard: camera" width="160"></td>
+    <td valign="top"><img src="docs/screenshots/wizard-3-password.png" alt="Wizard: password" width="160"></td>
+    <td valign="top"><img src="docs/screenshots/wizard-4-network.png" alt="Wizard: network" width="160"></td>
+    <td valign="top"><img src="docs/screenshots/wizard-5-updates.png" alt="Wizard: updates" width="160"></td>
+    <td valign="top"><img src="docs/screenshots/wizard-6-save.png" alt="Wizard: save your details" width="160"></td>
   </tr>
 </table>
 
@@ -97,12 +98,14 @@ Four short steps; everything else has a sensible default behind *More options*.
 | **Camera** | You see the live picture. Name the camera – the name appears in Home Assistant and becomes the address `onvipi-<name>.local`. Several webcams are listed one below the other. |
 | **Password** | One account for everything: web interface, Home Assistant and the login on the Pi. Username `admin` unless changed. |
 | **Network** | Choose your Wi-Fi. With a network cable this step is already done. A USB Wi-Fi adapter can be selected here. |
+| **Updates** | Two switches, both on by default: look for updates automatically, and install them automatically. |
 | **Save your details** | Address, username and password on one page. Nothing changes until you confirm that you saved them – only then the camera connects and the setup Wi-Fi switches off. |
 
 - **Wrong Wi-Fi password?** The setup Wi-Fi comes back and the wizard reopens at the network
   step with your other answers kept.
-- **Lost Wi-Fi later?** After five minutes without network the hotspot opens again and shows the
-  normal web interface (with login) – choose another Wi-Fi under *Network*.
+- **Lost Wi-Fi later?** After five minutes without network the hotspot opens again – now
+  protected with **your password as the Wi-Fi key**. It shows the normal web interface (with
+  login); choose another Wi-Fi under *Network*.
 - **Forgot the password?** Create an empty file `onvipi-reset` on the SD card's boot partition
   and restart. The wizard asks for a new one; cameras and network are kept.
 
@@ -183,17 +186,17 @@ A USB stick can be read on any computer.
 ### Network, update, backup
 
 - **Fixed IP without lock-out:** unconfirmed IP settings are reverted after three minutes.
-- **Updates:** by default the camera looks for a new release every night (between 3:00 and
-  4:30) and installs it – checksum verified, settings and recordings kept. *Updates* shows
-  the state, lets you check and install right away, and switches the automatic off. Looking
-  for updates is the only time OnviPi contacts the internet; switched off, it never does.
+- **Updates:** two switches (wizard and page *Updates*), both on by default. *Look for
+  updates automatically* asks GitHub once a night (between 3:00 and 4:30); *Install updates
+  automatically* installs a new release the same night – checksum verified, settings and
+  recordings kept. With the first one off, OnviPi never contacts the internet on its own.
 - **Backup / restore:** one file with all settings – it contains your passwords. Restored on a
   replacement device, Home Assistant keeps recognising the cameras.
 - **Factory reset:** back to the setup wizard. Recordings are kept.
 
 > [!TIP]
 > **Remote access:** use a VPN (e.g. WireGuard on your router). The web interface uses plain
-> HTTP – never forward its port or ports `1984`, `8554`, `8000` to the internet.
+> HTTP – never forward its port or ports `8554`, `8000` to the internet.
 
 ---
 
@@ -232,14 +235,15 @@ Assistant is subscribed or recording on motion is switched on.
 
 | | |
 |---|---|
-| `/etc/onvipi/onvipi.conf` | device settings: account (`CAM_USER`, `CAM_PASSWORD`), `BITRATE`, `HW_ENCODE` (Pi 4 only; freezes WebRTC), `ONVIF_PORT`, `WIFI_IFACE`, `WIFI_COUNTRY`, `AP_SSID`, `AP_PASSWORD`, `REC_MODE`, `REC_UUID`, `REC_DAYS`, `REC_MAX_GB`, `MOTION_FPS`, `MOTION_COOLDOWN`, `UPDATE_AUTO`, `UPDATE_REPO` |
+| `/etc/onvipi/onvipi.conf` | device settings: account (`CAM_USER`, `CAM_PASSWORD`), `BITRATE`, `HW_ENCODE` (Pi 4 only; freezes WebRTC), `ONVIF_PORT`, `WIFI_IFACE`, `WIFI_COUNTRY`, `AP_SSID`, `AP_PASSWORD`, `REC_MODE`, `REC_UUID`, `REC_DAYS`, `REC_MAX_GB`, `MOTION_FPS`, `MOTION_COOLDOWN`, `UPDATE_CHECK`, `UPDATE_AUTO`, `UPDATE_REPO`, `TRUSTED_HOSTS`, `GO2RTC_LAN` |
 | `/etc/onvipi/cameras.json` | one entry per webcam: name, source, resolution, rotation, motion, zones, sound, port, ID |
 | `sudo onvipi-wifi status` | network, hotspot, account and cameras |
 | `sudo onvipi-wifi portal` | start the hotspot right away |
 | `sudo onvipi-wifi reset` | forget saved Wi-Fi networks |
 | `journalctl -u 'onvipi-*' -f` | watch the log (also: *System → Download log*) |
 
-**Ports:** web interface `80` · ONVIF `8000` (+1 per camera) · RTSP `8554` · go2rtc `1984` · WebRTC `8555`.
+**Ports:** web interface `80` · ONVIF and snapshot `8000` (+1 per camera) · RTSP `8554` · WebRTC `8555`.
+go2rtc's own page (`1984`) is only reachable on the Pi itself.
 **Streams:** `rtsp://admin:<password>@<pi>:8554/onvipi`, `/cam2`, … (low resolution: `…_sub`).
 
 ---
@@ -250,6 +254,8 @@ Assistant is subscribed or recording on motion is switched on.
 |---|---|
 | **Setup Wi-Fi does not appear** | The first boot takes up to 5 minutes. On a set-up device the hotspot only starts without network (`sudo onvipi-wifi portal`). |
 | **Password forgotten** | File `onvipi-reset` on the boot partition, restart. |
+| **HA shows no still picture** | After updating to 2.3 choose *Reconfigure* on the ONVIF device once (the snapshot address changed); the live view is not affected. |
+| **“This address is not allowed”** | Open the camera by its IP address or as `http://<name>.local`. For another name (reverse proxy), add it as `TRUSTED_HOSTS='cam.example.org'` to `onvipi.conf`. |
 | **HA does not find the camera** | Same network, no guest Wi-Fi; otherwise add it manually with host and port. |
 | **Added in HA, but no picture** | Wrong password – choose *Reconfigure* on the ONVIF device. |
 | **Picture stutters / Pi is hot** | Lower resolution or frame rate under *Cameras → Picture and sound*, or switch a camera off. |
@@ -265,18 +271,35 @@ Assistant is subscribed or recording on motion is switched on.
 
 ## 8. Security
 
-- **Nothing shared in the image:** SSH host keys and device ID are generated per device; you
-  choose the password.
-- **One account.** The wizard is open only while no account exists; afterwards everything needs
-  the login – also on the hotspot. Resetting the password needs physical access to the SD card.
-- **SSH and the terminal are off** until you enable them in expert mode.
-- **Web interface:** session cookie, lock-out after five failed logins, changes only accepted
-  from the page itself. Plain HTTP – for the home network or a VPN.
-- **The ONVIF service runs unprivileged;** reboot and clock setting go through a helper that
-  `sudo` allows for exactly these two actions.
-- **go2rtc on port `1984`** has no password – never forward it.
-- **No cloud.** The only outgoing connection is the update check at GitHub (nightly by default,
-  can be switched off under *Updates*). Downloads are verified against the release checksum.
+OnviPi is built for the home network. What protects it:
+
+| Area | Protection |
+|---|---|
+| **Account** | One password for web interface, ONVIF, RTSP and snapshots. The wizard is open only while no account exists; resetting the password needs physical access to the SD card. |
+| **Guessing passwords** | Web interface: 5 wrong attempts lock the address for 10 minutes. ONVIF and snapshots: 10 wrong attempts lock it for 5 minutes. |
+| **Web interface** | Session cookie (`HttpOnly`, `SameSite=Strict`), changes only accepted from the page itself, Content-Security-Policy, and only the device's own addresses are accepted as host name (stops DNS-rebinding attacks from websites you visit). |
+| **Video** | RTSP, ONVIF and snapshots need the password. go2rtc's unprotected management interface is bound to the Pi itself; live view goes through the web interface with login. |
+| **Hotspot** | The hotspot of a set-up device is WPA2-encrypted with your password, so the login cannot be read by someone in range. |
+| **Services** | ONVIF, video and discovery run as an unprivileged user; reboot and clock setting go through a helper that `sudo` allows for exactly these two actions. SSH and the browser terminal are off until you enable them. |
+| **Updates** | Downloaded over HTTPS from the project's GitHub releases and verified against the published checksum. |
+| **Image** | Nothing shared between devices: SSH host keys and device ID are generated on first boot. |
+
+Known limits – please keep them in mind:
+
+- **Plain HTTP.** Web interface, ONVIF and RTSP are not encrypted. Anyone who can listen to your
+  home network can read the password. Use a VPN for remote access; never forward ports.
+- **The setup Wi-Fi is open.** During the few minutes of the wizard, someone within Wi-Fi range
+  could read what you type (the new password, your Wi-Fi key) or run the wizard before you do.
+  For a sensitive environment, set the camera up over a network cable.
+- **One password for everything.** Home Assistant stores it; whoever knows it controls the camera.
+- **RTSP has no lock-out** (it is go2rtc's server) – use a password that is not guessable.
+- **Updates are trusted by their source,** not by a separate signature: whoever controls the
+  GitHub repository can ship software to devices with automatic updates on.
+- **The web interface runs as root** (it manages network and accounts). It is the part to keep
+  away from untrusted networks.
+
+Found a security problem? Please report it privately via GitHub *Security → Report a
+vulnerability* instead of a public issue.
 
 ---
 

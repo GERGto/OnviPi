@@ -6,9 +6,10 @@
   onvipi_update.py auto      nächtlicher Lauf (onvipi-autoupdate.timer): prüfen und –
                              wenn UPDATE_AUTO nicht '0' ist – gleich installieren
 
-Automatische Updates sind standardmäßig an (UPDATE_AUTO fehlt oder '1'). Abschalten auf
-der Seite "Updates"; dann wird auch nicht mehr automatisch nach Updates gesucht und es
-gibt keine Verbindung ins Internet, solange der Nutzer nicht selbst sucht.
+Zwei Schalter (Assistent, Seite "Updates"), beide standardmäßig an:
+  UPDATE_CHECK  nachts selbst nach Updates suchen. Aus = keine Verbindung ins Internet,
+                solange der Nutzer nicht selbst sucht.
+  UPDATE_AUTO   gefundene Updates gleich installieren. Aus = nur anzeigen.
 
 "install" aus der Oberfläche läuft als eigene systemd-Einheit (systemd-run), weil
 install.sh auch den Dienst der Oberfläche neu startet. Fortschritt: STATUS (flüchtig),
@@ -68,14 +69,22 @@ def check():
     data = json.loads(fetch(f"https://api.github.com/repos/{repo()}/releases/latest"))
     latest = str(data.get("tag_name", "")).lstrip("v")
     cur, new = version_key(current_version()), version_key(latest)
+    url = str(data.get("html_url", ""))
     return {"current": current_version(), "latest": latest,
             "available": bool(new) and (cur is None or new > cur),
-            "url": data.get("html_url", "")}
+            "url": url if url.startswith("https://github.com/") else ""}
+
+
+def check_enabled(conf=None):
+    """Nachts selbst nach Updates suchen (UPDATE_CHECK, Standard an)."""
+    conf = load_conf(CONF) if conf is None else conf
+    return conf.get("UPDATE_CHECK", "1") != "0"
 
 
 def auto_enabled(conf=None):
+    """Gefundene Updates auch gleich installieren (UPDATE_AUTO, Standard an; braucht die Suche)."""
     conf = load_conf(CONF) if conf is None else conf
-    return conf.get("UPDATE_AUTO", "1") != "0"
+    return check_enabled(conf) and conf.get("UPDATE_AUTO", "1") != "0"
 
 
 def read_state():
@@ -191,15 +200,18 @@ def install():
 
 def auto():
     """Nächtlicher Lauf. Gibt 0 zurück, auch wenn nichts zu tun war."""
-    if not auto_enabled():
-        print("Automatic updates are switched off.")
-        return 0
-    if version_key(current_version()) is None:
-        print("Development build – not updated automatically.")
+    if not check_enabled():
+        print("Automatic update checks are switched off.")
         return 0
     info = check_and_store()
     if not info["available"]:
         print(f"Up to date ({info['current']}).")
+        return 0
+    if not auto_enabled():
+        print(f"Version {info['latest']} is available (automatic installation is off).")
+        return 0
+    if version_key(current_version()) is None:
+        print("Development build – not updated automatically.")
         return 0
     print(f"Installing version {info['latest']} (installed: {info['current']}) …")
     install()
