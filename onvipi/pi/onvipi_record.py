@@ -5,6 +5,18 @@ Einstellungen in onvipi.conf (Seite "Recordings" der Oberfläche):
   REC_MODE   off | motion | continuous
   REC_UUID   Dateisystem-UUID des gewählten USB-Speichers, oder "local" = SD-Karte
   REC_DAYS   Aufnahmen nach so vielen Tagen löschen (Standard 14)
+  REC_MAX_GB Aufnahmen belegen höchstens so viele GB (leer/0 = so viel wie frei ist)
+
+Der Speicher kann nicht volllaufen – drei Sicherungen greifen nacheinander:
+  1. Ringspeicher: Aufnahmen älter als REC_DAYS, über REC_MAX_GB oder – sobald weniger als
+     die Reserve frei ist – die jeweils ältesten werden gelöscht. Geprüft wird der freie
+     Platz alle 2 Sekunden.
+  2. Notbremse: Ist trotz Löschen weniger als die halbe Reserve frei (andere Daten füllen
+     den Speicher), wird die Aufnahme angehalten und erst fortgesetzt, wenn wieder die
+     ganze Reserve frei ist.
+  3. Gelöscht werden ausschließlich eigene Aufnahmen (JJJJMMTT-HHMMSS.mp4 im Ordner
+     onvipi), nie andere Dateien. Fehlt der USB-Speicher, wird nicht ersatzweise auf die
+     SD-Karte geschrieben.
 
 Arbeitsweise:
   * Ein USB-Speicher wird unter MOUNT eingehängt (ext4, exFAT, FAT32, NTFS – nichts wird
@@ -200,6 +212,10 @@ class Recorder:
         self.motion = {}      # Kamera-ID -> [Zeitpunkte mit Bewegung]
         self.boot = time.time()
         self.last_prune = 0
+        self.paused = False   # Notbremse: Speicher voll, obwohl nichts mehr zu löschen ist
+        self.used = 0         # Bytes aller eigenen Aufnahmen (Stand des letzten Aufräumens)
+        self.count = 0
+        self.oldest = None    # Startzeit der ältesten Aufnahme
 
     def command(self, cam, conf, mode):
         url = (f"rtsp://{conf.get('CAM_USER', 'admin')}:{conf.get('CAM_PASSWORD', '')}"
@@ -221,6 +237,8 @@ class Recorder:
                 continue
             if time.time() - self.started.get(cam_id, 0) < 10:
                 continue  # Stream noch nicht bereit -> nicht im Sekundentakt neu starten
+            if not is_local() and not os.path.ismount(MOUNT):
+                return   # USB-Speicher fehlt: niemals ersatzweise auf die SD-Karte schreiben
             os.makedirs(camera_dir(cam_id), exist_ok=True)
             self.started[cam_id] = time.time()
             try:
@@ -271,26 +289,74 @@ class Recorder:
                 if not any(start <= t <= end + POST_ROLL for t in times):
                     remove(os.path.join(camera_dir(cam["id"]), name))
 
-    def prune(self, days):
-        """Ringspeicher: zu alte Aufnahmen und – bei knappem Platz – die ältesten löschen."""
-        if time.time() - self.last_prune < 60:
+    def prune(self, days, limit=0, force=False):
+        """Ringspeicher. Löscht nacheinander: zu alte Aufnahmen, alles über der Obergrenze
+        `limit` (Bytes, 0 = keine) und – solange die Reserve unterschritten ist – die ältesten.
+
+        Der gerade geschriebene Abschnitt jeder Kamera bleibt immer stehen. `force` räumt
+        sofort auf (freier Platz knapp), sonst höchstens alle 30 Sekunden.
+        """
+        now = time.time()
+        if now - self.last_prune < (5 if force else 30):
             return
-        self.last_prune = time.time()
+        self.last_prune = now
         try:
             cams = [d for d in os.listdir(root()) if os.path.isdir(os.path.join(root(), d))]
         except OSError:
             return
-        files = sorted((start, cam, name) for cam in cams for start, name, _ in list_files(cam))
-        limit = time.time() - days * 86400
-        while files and files[0][0] < limit:
-            _, cam, name = files.pop(0)
-            remove(os.path.join(camera_dir(cam), name))
-        for _ in range(50):
-            total, free = usage()
-            if not total or free >= reserve(total) or len(files) <= 1:
+        per_cam = {cam: list_files(cam) for cam in cams}
+        current = {(cam, files[-1][1]) for cam, files in per_cam.items() if files}
+        files = sorted((start, cam, name, size) for cam, items in per_cam.items()
+                       for start, name, size in items)
+        used = sum(f[3] for f in files)
+        kept = []
+
+        def drop_oldest():
+            """Löscht die älteste löschbare Aufnahme. False, wenn es keine mehr gibt."""
+            nonlocal used
+            while files:
+                start, cam, name, size = files.pop(0)
+                if (cam, name) in current:
+                    kept.append((start, cam, name, size))
+                    continue
+                remove(os.path.join(camera_dir(cam), name))
+                used -= size
+                return True
+            return False
+
+        cutoff = now - days * 86400
+        while files and files[0][0] < cutoff:
+            if not drop_oldest():
                 break
-            _, cam, name = files.pop(0)
-            remove(os.path.join(camera_dir(cam), name))
+        while limit and used > limit:
+            if not drop_oldest():
+                break
+        for _ in range(500):
+            total, free = usage()
+            if not total or free >= reserve(total) or not drop_oldest():
+                break
+        files = sorted(kept + files)
+        self.used, self.count = used, len(files)
+        self.oldest = files[0][0] if files else None
+
+    def guard(self):
+        """Notbremse: True, solange aufgenommen werden darf.
+
+        Hält an, wenn nach dem Aufräumen weniger als die halbe Reserve frei ist, und gibt
+        erst wieder frei, wenn die ganze Reserve frei ist (kein Flattern an der Grenze).
+        """
+        total, free = usage()
+        if not total:
+            return not self.paused
+        need = reserve(total)
+        if free < need / 2:
+            if not self.paused:
+                log.warning("Storage is full (%d MB free) – recording paused", free >> 20)
+            self.paused = True
+        elif free >= need and self.paused:
+            log.info("Storage has space again – recording continues")
+            self.paused = False
+        return not self.paused
 
 
 def thumb_path(path):
@@ -361,6 +427,15 @@ def settings(conf):
     return (mode if mode in MODES else "off"), conf.get("REC_UUID", ""), days
 
 
+def max_bytes(conf):
+    """Obergrenze für alle Aufnahmen zusammen in Bytes (0 = keine)."""
+    try:
+        gb = float(str(conf.get("REC_MAX_GB", "") or 0).replace(",", "."))
+    except ValueError:
+        return 0
+    return int(gb * 1e9) if gb > 0 else 0
+
+
 def main():
     logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"), format="%(name)s: %(message)s")
     rec = Recorder()
@@ -397,14 +472,24 @@ def main():
             continue
         last_error = None
         cams = [c for c in load_cameras(conf) if c["enabled"]]
-        rec.ensure(cams, conf, mode)
-        if mode == "motion":
-            rec.note_motion(cams)
-            rec.drop_quiet(cams)
-        rec.prune(days)
+        limit = max_bytes(conf)
         total, free = usage()
-        write_status(mode=mode, mounted=True, error="", total=total, free=free,
-                     local=is_local(), reserve=reserve(total),
+        # erst Platz schaffen, dann schreiben; bei knappem Platz sofort statt im 30-s-Takt
+        rec.prune(days, limit, force=bool(total) and free < reserve(total))
+        error = ""
+        if rec.guard():
+            rec.ensure(cams, conf, mode)
+            if mode == "motion":
+                rec.note_motion(cams)
+                rec.drop_quiet(cams)
+        else:
+            rec.stop()
+            error = ("The storage is full with other data. Recording is paused and continues "
+                     "as soon as there is free space again.")
+        total, free = usage()
+        write_status(mode=mode, mounted=True, error=error, total=total, free=free,
+                     local=is_local(), reserve=reserve(total), limit=limit,
+                     used=rec.used, count=rec.count, oldest=rec.oldest, days=days,
                      recording=[i for i, p in rec.procs.items() if p.poll() is None])
         time.sleep(2)
 

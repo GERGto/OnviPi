@@ -51,7 +51,8 @@ rm -f /opt/onvipi/web/*
 install -m 644 "$PKG"/pi/web/* /opt/onvipi/web/
 install -m 755 "$PKG"/setup/*.sh /opt/onvipi/setup/
 [ -f "$PKG/VERSION" ] && install -m 644 "$PKG/VERSION" /opt/onvipi/VERSION
-install -m 644 "$PKG"/systemd/*.service /etc/systemd/system/
+install -m 644 "$PKG"/systemd/*.service "$PKG"/systemd/*.timer /etc/systemd/system/
+install -d -m 755 /var/lib/onvipi
 install -d /etc/NetworkManager/dnsmasq-shared.d
 install -m 644 "$PKG"/nm/onvipi-captive.conf /etc/NetworkManager/dnsmasq-shared.d/
 ln -sf /opt/onvipi/onvipi_wifi.py /usr/local/bin/onvipi-wifi
@@ -74,4 +75,4 @@ fi
 say "Enabling services"
 [ -d /run/systemd/system ] && systemctl daemon-reload   # no systemd inside the chroot
 systemctl enable onvipi-go2rtc.service onvipi-onvif.service onvipi-wsd.service \
-  onvipi-mqtt.service onvipi-record.service onvipi-wifi.service
+  onvipi-mqtt.service onvipi-record.service onvipi-wifi.service onvipi-autoupdate.timer

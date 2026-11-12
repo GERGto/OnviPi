@@ -43,6 +43,7 @@ fi
 
 say "Starting services"
 systemctl daemon-reload
+systemctl start onvipi-autoupdate.timer
 systemctl restart onvipi-go2rtc.service onvipi-onvif.service onvipi-wsd.service \
   onvipi-mqtt.service onvipi-record.service onvipi-wifi.service
 

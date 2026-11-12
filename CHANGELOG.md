@@ -6,6 +6,9 @@ All notable changes to OnviPi. Downloads are available under
 ## [2.2] – 2026-11-12
 
 ### Changed
+- **Privacy note:** with automatic updates on, the camera contacts GitHub once a night. Switch
+  it off under *Updates* if the device must not connect to the internet on its own.
+- README shortened and reorganised.
 - **App-like interface on phones.** In the setup wizard the buttons (*Back*, *Next*) sit in a
   fixed bar at the bottom – always at the same place – with a fixed header and step
   transitions. The settings interface has a fixed title bar, dialogs slide up from the
@@ -13,8 +16,17 @@ All notable changes to OnviPi. Downloads are available under
 - **Live view instead of still pictures** in the wizard, on the overview and on the camera
   cards. It runs through the settings page itself (port 80, same login); if the player is not
   available, a picture that refreshes itself is shown.
+- The title of a camera card follows the name field while typing.
+- **Recording can no longer overfill the storage:** free space is checked every two seconds,
+  the oldest recordings go first, a reserve always stays free, and recording pauses if other
+  data fills the storage. Without the USB storage nothing is written to the SD card instead.
 
 ### Added
+- **Automatic updates,** on by default: every night the camera looks for a new release and
+  installs it. New page **Updates** with the installed version, the last check and update,
+  *Check for updates* and the switch for the automatic. (Replaces the update card under
+  *System*.)
+- Recording: optional size limit in GB and a display of how many days fit on the storage.
 - The settings page can be added to the phone's home screen and then opens like an app
   (icon, no browser bars).
 

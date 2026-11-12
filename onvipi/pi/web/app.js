@@ -15,6 +15,7 @@ const PAGES = [
   { id: "recordings", title: "Recordings", icon: "film", render: pageRecordings },
   { id: "network", title: "Network", icon: "wifi", render: pageNetwork },
   { id: "homeassistant", title: "Home Assistant", short: "Home Asst.", icon: "link", render: pageHomeAssistant },
+  { id: "updates", title: "Updates", icon: "download", render: pageUpdates },
   { id: "system", title: "System", icon: "sliders", render: pageSystem },
   { id: "terminal", title: "Terminal", icon: "terminal", render: pageTerminal, expert: true },
 ];
@@ -192,6 +193,8 @@ async function pageOverview() {
       " You are connected through its setup hotspot. Open ", h("a", { href: "#/network" }, "Network"),
       " to connect it to your Wi-Fi.") : null,
     s.warnings.map((w) => banner("warn", w)),
+    s.update.available && !s.update.auto ? banner("info", h("b", {}, `Version ${s.update.latest} is available. `),
+      h("a", { href: "#/updates" }, "Open Updates")) : null,
     active.length ? h("div", { class: "cams" + (active.length > 1 ? " multi" : "") },
       active.map((c) => h("div", { class: "card" },
         h("div", { class: "card-head" },
@@ -538,6 +541,7 @@ async function pageRecordings(rerender) {
   const mode = select(REC_MODES, set.mode);
   const storage = select(d.storages.map((s) => [s.uuid, storageName(s)]), set.uuid || (d.storages[0] || {}).uuid);
   const days = h("input", { type: "number", min: 1, max: 365, value: set.days });
+  const maxGb = h("input", { type: "number", min: 1, step: "any", value: set.max_gb || "", placeholder: "no limit" });
   const sdNote = h("div");
   const syncNote = () => {
     const local = (d.storages.find((s) => s.uuid === storage.value) || {}).local;
@@ -547,7 +551,7 @@ async function pageRecordings(rerender) {
   };
   mode.onchange = syncNote; storage.onchange = syncNote; syncNote();
   const save = h("button", { class: "btn", onclick: () => busy(save, async () => {
-    await api("recordings/settings", { mode: mode.value, uuid: storage.value, days: days.value });
+    await api("recordings/settings", { mode: mode.value, uuid: storage.value, days: days.value, max_gb: maxGb.value });
     toast(mode.value === "off" ? "Recording switched off." : "Recording settings saved.");
     await sleep(2500);
     rerender();
@@ -560,7 +564,15 @@ async function pageRecordings(rerender) {
       field("Store on", storage, d.storages.length > 1 ? null
         : "No USB storage found – plug in a USB stick or SSD to use it instead of the SD card.")),
     sdNote,
-    field("Keep recordings for … days", days, "Older recordings are deleted automatically, also when the storage runs full."),
+    h("div", { class: "fields two" },
+      field("Overwrite after … days", days, "Recordings older than this are deleted automatically."),
+      field("Use at most … GB", maxGb, "Optional. Without a limit the free space is used.")),
+    h("ul", { class: "checklist small muted" },
+      h("li", {}, icon("shield"), h("span", {}, h("b", {}, "The storage cannot run full. "),
+        "When space gets short, the oldest recordings are deleted first – even before the days are over.")),
+      h("li", {}, icon("shield"), h("span", {}, "A reserve always stays free",
+        " (USB: 5 %, at least 500 MB · SD card: 15 %, at least 2 GB). If other data fills the storage, recording pauses instead of overfilling it.")),
+      h("li", {}, icon("shield"), h("span", {}, "Only the camera’s own recordings are ever deleted, never other files on the storage."))),
     h("div", { class: "actions" }, save));
 
   // ---- status line
@@ -569,8 +581,25 @@ async function pageRecordings(rerender) {
   else if (on && !st) statusBanner = banner("warn", "The recording service is starting …");
   else if (on && st) {
     const used = st.total ? Math.round(100 * (1 - st.free / st.total)) : 0;
-    statusBanner = banner("ok", h("b", {}, set.mode === "motion" ? "Recording when something moves" : "Recording all the time"),
+    // how many days fit at the rate of the recordings so far
+    let fit = null;
+    const span = st.oldest ? Date.now() / 1000 - st.oldest : 0;
+    if (st.used > 0 && span > 3 * 3600) {
+      const perDay = st.used / (span / 86400);
+      const room = Math.max(0, st.used + st.free - (st.reserve || 0));
+      const days = Math.floor(Math.min(room, st.limit || room) / perDay);
+      fit = days < st.days
+        ? h("div", { class: "small" }, `At the current rate the space lasts for about ${Math.max(1, days)} day${days === 1 ? "" : "s"} – `,
+          `less than the ${st.days} days you set. The oldest recordings are overwritten earlier.`)
+        : h("div", { class: "small muted" }, `Enough space for the ${st.days} days you set.`);
+    }
+    statusBanner = banner(fit && fit.className === "small" ? "warn" : "ok",
+      h("b", {}, set.mode === "motion" ? "Recording when something moves" : "Recording all the time"),
       ` · ${chosen ? storageName(chosen) : "storage"} · ${formatBytes(st.free)} free (${used} % used)`,
+      st.count ? h("div", { class: "small muted" }, `${st.count} recordings · ${formatBytes(st.used)}`,
+        st.limit ? ` of at most ${formatBytes(st.limit)}` : "",
+        st.oldest ? ` · oldest from ${new Date(st.oldest * 1000).toLocaleDateString()}` : "") : null,
+      fit,
       st.recording.length < d.cameras.length ? h("div", { class: "small muted" },
         `${st.recording.length} of ${d.cameras.length} cameras are recording right now.`) : null);
   }
@@ -655,38 +684,97 @@ async function pageRecordings(rerender) {
 }
 
 /* ------------------------------------------------------------------ update, backup, reset */
-function updateCard(s, rerender) {
+function when(epoch) {
+  if (!epoch) return "never";
+  const d = new Date(epoch * 1000);
+  const days = Math.floor((new Date().setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 86400000);
+  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  if (days === 0) return "today, " + time;
+  if (days === 1) return "yesterday, " + time;
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) + ", " + time;
+}
+
+async function pageUpdates(rerender) {
+  const u = await api("system/update");
+  const st = u.state;
   const out = h("div");
-  const install = (info) => h("button", { class: "btn", onclick: async (e) => {
-    const btn = e.currentTarget;
-    if (!await confirmDialog({ title: `Install version ${info.latest}?`, confirm: "Install",
-      text: "The camera downloads the update and restarts its services. This takes a few minutes; "
-        + "the picture is interrupted meanwhile. Your settings are kept." })) return;
-    busy(btn, async () => {
-      await api("system/update/install", {});
-      clear(out, banner("info", h("b", {}, "Updating …"), " Please keep this page open. It reloads when the update is done."));
-      for (let i = 0; i < 240; i++) {
-        await sleep(5000);
-        let u;
-        try { u = await api("system/update"); } catch (err) { continue; }   // services restart meanwhile
-        if (u.status.phase === "failed") throw new Error("The update failed: " + (u.status.error || "see the log"));
-        if (u.status.phase === "done") { toast("Update installed."); await sleep(3000); return location.reload(); }
+  const running = ["downloading", "installing"].includes(u.status.phase)
+    && Date.now() / 1000 - (u.status.updated || 0) < 1800;
+
+  const follow = async () => {
+    clear(out, banner("info", h("b", {}, "Updating …"), " Please keep this page open. It reloads when the update is done. ",
+      "The picture is interrupted for a few minutes."));
+    for (let i = 0; i < 240; i++) {
+      await sleep(5000);
+      let now;
+      try { now = await api("system/update"); } catch (err) { continue; }   // services restart meanwhile
+      if (now.status.phase === "failed") {
+        return clear(out, banner("error", h("b", {}, "The update failed. "), now.status.error || "See the log under System."));
       }
-      throw new Error("The update did not finish in time. Please check the log.");
-    });
-  } }, icon("download"), `Install version ${info.latest}`);
+      if (now.status.phase === "done") { toast("Update installed."); await sleep(3000); return location.reload(); }
+    }
+    clear(out, banner("error", "The update did not finish in time. Please check the log under System."));
+  };
+  const installButton = (latest) => h("button", { class: "btn", onclick: async (e) => {
+    const btn = e.currentTarget;
+    if (!await confirmDialog({ title: `Install version ${latest}?`, confirm: "Install",
+      text: "The camera downloads the update and restarts its services. This takes a few minutes; "
+        + "picture and recording are interrupted meanwhile. Your settings are kept." })) return;
+    busy(btn, async () => { await api("system/update/install", {}); follow(); });
+  } }, icon("download"), `Install version ${latest}`);
+  const showAvailable = (info) => clear(out,
+    banner("info", h("b", {}, `Version ${info.latest} is available.`), " ",
+      info.url ? h("a", { href: info.url, target: "_blank", rel: "noopener" }, "What is new?") : null,
+      u.auto ? h("div", { class: "small muted" }, "It is installed automatically tonight – or right now with the button below.") : null),
+    h("div", { class: "actions" }, installButton(info.latest)));
+
+  if (running) follow();
+  else if (st.available && st.latest) showAvailable(st);
+  else if (st.last_check && !st.check_error) clear(out, banner("ok", "This camera is up to date."));
+  else if (st.check_error) {
+    clear(out, banner("warn", "The last check did not reach the update server. Is the camera connected to the internet?"));
+  }
+
   const check = h("button", { class: "btn secondary", onclick: () => busy(check, async () => {
     const info = await api("system/update/check", {});
-    clear(out, info.available
-      ? [banner("info", h("b", {}, `Version ${info.latest} is available.`), " You have ", info.current, ". ",
-        info.url ? h("a", { href: info.url, target: "_blank", rel: "noopener" }, "What is new?") : null), install(info)]
-      : banner("ok", `You have the newest version (${info.current}).`));
+    if (info.available) showAvailable(info);
+    else { clear(out, banner("ok", `This camera is up to date (version ${info.current}).`)); }
+    checked.textContent = "just now";
   }) }, icon("refresh"), "Check for updates");
-  return h("div", { class: "card" },
-    h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Update"),
-      h("div", { class: "sub" }, "Installed: version " + s.version))),
-    h("p", { class: "muted small" }, "The camera contacts GitHub only when you press this button. It needs internet access for that."),
-    out, h("div", { class: "actions" }, check));
+  const checked = h("dd", {}, when(st.last_check));
+  const last = st.last_update;
+
+  const auto = toggle("Install updates automatically", u.auto, (e) => {
+    const want = e.target.checked;
+    api("system/update/auto", { enable: want }).then((r) => {
+      e.target.checked = r.auto;
+      toast(r.auto ? "Automatic updates are on." : "Automatic updates are off.");
+      rerender();
+    }, (err) => { e.target.checked = !want; toast(err.message, "error"); });
+  });
+
+  return [
+    pageHead("Updates", "Keep the camera secure and up to date."),
+    h("div", { class: "card" },
+      h("div", { class: "card-head" }, h("div", { style: "flex:1" }, h("h2", {}, "Version " + u.current),
+        h("div", { class: "sub" }, "Installed on this camera")), running ? null : check),
+      out,
+      h("dl", { class: "kv", style: "margin-top:14px" },
+        h("dt", {}, "Last check"), checked,
+        last ? h("dt", {}, "Last update") : null,
+        last ? h("dd", {}, last.ok ? `Version ${last.version}, ${when(last.time)}`
+          : h("span", {}, h("span", { class: "badge error" }, "Failed"), ` ${when(last.time)} – ${last.error || "see the log"}`)) : null)),
+    h("div", { class: "card" },
+      h("div", { class: "card-head" }, h("h2", {}, "Automatic updates")),
+      h("div", { class: "field" }, auto,
+        h("div", { class: "hint" }, u.auto
+          ? "Every night between 3:00 and 4:30 the camera looks for a new version and installs it. Picture and recording are interrupted for a few minutes."
+          : "Switched off. The camera does not look for updates by itself and never contacts the internet on its own.")),
+      h("ul", { class: "checklist small muted" },
+        h("li", {}, icon("shield"), h("span", {}, "Updates come from the project’s releases on GitHub and are checked against the published checksum before installing.")),
+        h("li", {}, icon("shield"), h("span", {}, "Your settings, cameras and recordings are kept.")),
+        h("li", {}, icon("shield"), h("span", {}, "Looking for updates is the only time the camera connects to the internet.")))),
+  ];
 }
 
 function backupCard(rerender) {
@@ -776,7 +864,6 @@ async function pageSystem(rerender) {
       h("p", { class: "muted small" }, "“Restart camera” helps when the picture hangs. “Restart device” restarts the whole Raspberry Pi."),
       h("div", { class: "actions" }, restart, reboot,
         h("a", { class: "btn secondary", href: "/api/system/logs" }, icon("download"), "Download log"))),
-    updateCard(s, rerender),
     backupCard(rerender),
   ];
   if (expert) {

@@ -130,6 +130,8 @@ record.mounted_uuid = lambda: load_conf(CONF).get("REC_UUID") or None
 record.use = lambda uuid: rec_dir
 record.read_status = lambda: {"mode": load_conf(CONF).get("REC_MODE", "off"), "mounted": True, "error": "",
                               "total": 64 << 30, "free": 41 << 30, "updated": time.time(),
+                              "reserve": 3 << 30, "limit": record.max_bytes(load_conf(CONF)), "days": 14,
+                              "used": 19 << 30, "count": 5184, "oldest": time.time() - 6 * 86400,
                               "recording": [c["id"] for c in camera.load_cameras() if c["enabled"]]}
 record.thumbnail = lambda path: snapshot(os.path.basename(path)[9:15])
 if not args.setup:
@@ -147,6 +149,9 @@ update.check = lambda: {"current": "dev", "latest": "2.2", "available": True,
                         "url": "https://github.com/GERGto/OnviPi/releases"}
 update.start = lambda: update.write_status("done", version="2.2")
 update.STATUS = os.path.join(conf_dir, "update.json")
+update.STATE = os.path.join(conf_dir, "update-state.json")
+update.save_state(last_check=time.time() - 9 * 3600, latest="2.2", available=False, check_error="",
+                  last_update={"version": "2.2", "time": time.time() - 4 * 86400, "ok": True, "error": ""})
 system.factory_reset = lambda: print("[sim] factory reset")
 system.NM_DIR = os.path.join(conf_dir, "nm")
 

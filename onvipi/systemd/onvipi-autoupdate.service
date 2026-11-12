@@ -1,0 +1,11 @@
+[Unit]
+Description=OnviPi automatic update (checks GitHub, installs a new release)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Started by onvipi-autoupdate.timer. Does nothing if automatic updates are switched off
+# on the "Updates" page (UPDATE_AUTO='0' in onvipi.conf).
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/onvipi/onvipi_update.py auto
+TimeoutStartSec=2400

@@ -344,6 +344,8 @@ class App:
     def start(self):
         http.server.ThreadingHTTPServer.allow_reuse_address = True
         http.server.ThreadingHTTPServer.daemon_threads = True
+        # Browser öffnen viele Verbindungen auf einmal (Seite, Skripte, Livebild, Vorschaubilder)
+        http.server.ThreadingHTTPServer.request_queue_size = 64
         self.server = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), make_handler(self))
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         log.info("Web interface running on port %d", PORT)
@@ -564,6 +566,9 @@ def make_handler(app):
             for c in active:
                 if not c["present"]:
                     warnings.append(f"Camera “{c['name']}” is not connected.")
+            upd = update.read_state()
+            if upd.get("last_update") and not upd["last_update"].get("ok"):
+                warnings.append("The last update could not be installed. See “Updates”.")
             if not cams:
                 warnings.append("No USB camera found. Plug one in and open “Cameras”.")
             if any(c["new"] for c in cams):
@@ -575,6 +580,8 @@ def make_handler(app):
                 "cameras": [{k: c[k] for k in ("id", "name", "enabled", "present", "new",
                                                "size", "fps")} for c in cams],
                 "interfaces": ifaces, "hotspot": app.ap,
+                "update": {"available": bool(upd.get("available")), "latest": upd.get("latest", ""),
+                           "auto": update.auto_enabled(conf)},
                 "recording": {"mode": (rec or {}).get("mode", "off"),
                               "active": (rec or {}).get("recording", [])},
                 "terminal": app.terminal.state(), "ip_change": app.ip_change.state()})
@@ -792,7 +799,9 @@ def make_handler(app):
                 cams.append({"id": cam["id"], "name": cam["name"], "motion": cam["motion"],
                              "days": [{"day": k, "count": v[0], "size": v[1]}
                                       for k, v in sorted(counts.items(), reverse=True)]})
-            self.json({"settings": {"mode": mode, "uuid": uuid, "days": days},
+            limit = record.max_bytes(load_conf(CONF))
+            self.json({"settings": {"mode": mode, "uuid": uuid, "days": days,
+                                    "max_gb": round(limit / 1e9, 1) if limit else 0},
                        "storages": record.storages(), "status": status, "ready": ready,
                        "cameras": cams})
 
@@ -806,8 +815,15 @@ def make_handler(app):
                 days = max(1, min(365, int(data.get("days") or 14)))
             except (TypeError, ValueError):
                 raise ApiError("Please enter the number of days to keep recordings.")
+            try:
+                max_gb = float(str(data.get("max_gb") or 0).replace(",", "."))
+                if not 0 <= max_gb <= 100000 or (0 < max_gb < 1):
+                    raise ValueError
+            except (TypeError, ValueError):
+                raise ApiError("The size limit must be at least 1 GB (or empty for no limit).")
             conf = load_conf(CONF)
-            conf.update(REC_MODE=mode, REC_UUID=uuid, REC_DAYS=str(days))
+            conf.update(REC_MODE=mode, REC_UUID=uuid, REC_DAYS=str(days),
+                        REC_MAX_GB=f"{max_gb:g}" if max_gb else "")
             save_conf(CONF, conf)
             log.info("Recording: %s on %s, keep %d days", mode, uuid or "-", days)
             restart_services("onvipi-record.service")
@@ -892,11 +908,19 @@ def make_handler(app):
 
         # -- Update, Sicherung, Werksreset
         def api_get_system_update(self, _):
-            self.json({"current": system.version(), "status": update.read_status()})
+            self.json({"current": system.version(), "auto": update.auto_enabled(),
+                       "state": update.read_state(), "status": update.read_status()})
+
+        def api_post_system_update_auto(self, data):
+            conf = load_conf(CONF)
+            conf["UPDATE_AUTO"] = "1" if data.get("enable") else "0"
+            save_conf(CONF, conf)
+            log.info("Automatic updates %s", "on" if data.get("enable") else "off")
+            self.json({"ok": True, "auto": update.auto_enabled()})
 
         def api_post_system_update_check(self, _):
             try:
-                self.json(update.check())
+                self.json(update.check_and_store())
             except (OSError, ValueError) as ex:
                 log.info("Update check failed: %s", ex)
                 raise ApiError("Could not reach the update server. Is the camera connected "

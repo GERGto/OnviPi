@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Update auf die neueste Version von GitHub ("System → Update" in der Oberfläche).
+"""Updates von GitHub (Seite "Updates" der Oberfläche).
 
   onvipi_update.py check     neueste Version abfragen (JSON auf stdout)
   onvipi_update.py install   Paket laden, Prüfsumme prüfen, install.sh ausführen
+  onvipi_update.py auto      nächtlicher Lauf (onvipi-autoupdate.timer): prüfen und –
+                             wenn UPDATE_AUTO nicht '0' ist – gleich installieren
 
-"install" läuft als eigene systemd-Einheit (systemd-run), weil install.sh auch den
-Dienst der Oberfläche neu startet. Der Fortschritt steht in STATUS (JSON).
-Es wird nur dann eine Verbindung ins Internet aufgebaut, wenn der Nutzer in der
-Oberfläche nach Updates sucht oder eines installiert.
+Automatische Updates sind standardmäßig an (UPDATE_AUTO fehlt oder '1'). Abschalten auf
+der Seite "Updates"; dann wird auch nicht mehr automatisch nach Updates gesucht und es
+gibt keine Verbindung ins Internet, solange der Nutzer nicht selbst sucht.
+
+"install" aus der Oberfläche läuft als eigene systemd-Einheit (systemd-run), weil
+install.sh auch den Dienst der Oberfläche neu startet. Fortschritt: STATUS (flüchtig),
+Verlauf (letzte Prüfung, letztes Update): STATE (bleibt über Neustarts erhalten).
 """
 import hashlib
 import json
@@ -25,6 +30,7 @@ from onvipilib import CONF, load_conf  # noqa: E402
 
 REPO = "GERGto/OnviPi"
 STATUS = os.environ.get("ONVIPI_UPDATE_STATUS", "/run/onvipi-update.json")
+STATE = os.environ.get("ONVIPI_UPDATE_STATE", "/var/lib/onvipi/update-state.json")
 WORK = "/var/tmp/onvipi-update"
 PACKAGE = "onvipi.tar.gz"
 UNIT = "onvipi-update"
@@ -65,6 +71,47 @@ def check():
     return {"current": current_version(), "latest": latest,
             "available": bool(new) and (cur is None or new > cur),
             "url": data.get("html_url", "")}
+
+
+def auto_enabled(conf=None):
+    conf = load_conf(CONF) if conf is None else conf
+    return conf.get("UPDATE_AUTO", "1") != "0"
+
+
+def read_state():
+    """Verlauf: {last_check, latest, available, url, last_update: {version, time, ok, error}}."""
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(**changes):
+    state = read_state()
+    state.update(changes)
+    try:
+        os.makedirs(os.path.dirname(STATE), exist_ok=True)
+        tmp = STATE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        os.replace(tmp, STATE)
+    except OSError:
+        pass
+    return state
+
+
+def check_and_store():
+    """Wie check(), merkt sich aber das Ergebnis für die Oberfläche."""
+    try:
+        info = check()
+    except (OSError, ValueError) as ex:
+        save_state(last_check=time.time(), check_error=str(ex))
+        raise
+    save_state(last_check=time.time(), check_error="", latest=info["latest"],
+               available=info["available"], url=info["url"])
+    return info
 
 
 def read_status():
@@ -137,20 +184,41 @@ def install():
     if r.returncode != 0:
         raise RuntimeError(f"The installer failed (exit code {r.returncode}) – see the log.")
     write_status("done", version=version)
+    save_state(available=False, last_update={"version": version, "time": time.time(),
+                                             "ok": True, "error": ""})
     shutil.rmtree(WORK, ignore_errors=True)
+
+
+def auto():
+    """Nächtlicher Lauf. Gibt 0 zurück, auch wenn nichts zu tun war."""
+    if not auto_enabled():
+        print("Automatic updates are switched off.")
+        return 0
+    if version_key(current_version()) is None:
+        print("Development build – not updated automatically.")
+        return 0
+    info = check_and_store()
+    if not info["available"]:
+        print(f"Up to date ({info['current']}).")
+        return 0
+    print(f"Installing version {info['latest']} (installed: {info['current']}) …")
+    install()
+    return 0
 
 
 def main(argv):
     if argv == ["check"]:
         print(json.dumps(check()))
         return 0
-    if argv == ["install"]:
+    if argv in (["install"], ["auto"]):
         try:
-            install()
-            return 0
+            return auto() if argv == ["auto"] else install() or 0
         except Exception as ex:   # jede Ursache soll in der Oberfläche ankommen
             print(f"Update failed: {ex}", file=sys.stderr)
-            write_status("failed", str(ex))
+            if read_status().get("phase") in ("downloading", "installing"):
+                write_status("failed", str(ex))
+                save_state(last_update={"version": read_state().get("latest", "?"),
+                                        "time": time.time(), "ok": False, "error": str(ex)})
             return 1
     print(__doc__, file=sys.stderr)
     return 2

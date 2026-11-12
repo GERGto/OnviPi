@@ -36,7 +36,7 @@ cat <<EOF
 1. Flash [\`onvipios-arm64.img.xz\`]($DL/onvipios-arm64.img.xz) with [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
    (*Use custom*, OS customisation: **No**).
 2. Plug in the webcam, power on the Pi and after 2–3 minutes join the Wi-Fi **\`OnviPi-Setup-XXXX\`**.
-3. The wizard guides you through camera, preview, access (user, password, SSH, country, time zone) and Wi-Fi.
+3. The wizard guides you through camera, password and network.
 
 **Package on an existing Raspberry Pi OS (Lite 64-bit, Bookworm/Trixie)**
 \`\`\`bash

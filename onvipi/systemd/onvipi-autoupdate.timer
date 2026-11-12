@@ -1,0 +1,13 @@
+[Unit]
+Description=OnviPi automatic update, once a night
+
+[Timer]
+# Between 03:00 and 04:30 local time; devices do not all ask at the same minute.
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=90min
+# Missed while switched off? Catch up 15 minutes after the next start.
+Persistent=true
+OnBootSec=15min
+
+[Install]
+WantedBy=timers.target
