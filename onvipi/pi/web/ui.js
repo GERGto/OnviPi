@@ -317,7 +317,10 @@ const FORMAT_NAMES = { mjpeg: "MJPEG", h264: "H.264", yuyv422: "YUYV (uncompress
 /* Form for one camera. Returns {el, value(), preview}. Used by the wizard and the settings.
    options: {motion: show motion detection, single: hide the on/off switch} */
 function cameraEditor(cam, options = {}) {
-  const name = h("input", { type: "text", maxLength: 48, value: cam.name, autocapitalize: "words" });
+  // the card title follows the name field while typing, so there is only ever one name on screen
+  const title = h("h2", {}, cam.name);
+  const name = h("input", { type: "text", maxLength: 48, value: cam.name, autocapitalize: "words",
+    oninput: () => { title.textContent = name.value.trim() || cam.name; } });
   const enabled = toggle(cam.new ? "Use this camera" : "Active", cam.new ? true : cam.enabled);
   const rotate = select(ROTATIONS, cam.rotate);
   const overlay = toggle("Show date and time in the picture", cam.overlay);
@@ -360,7 +363,7 @@ function cameraEditor(cam, options = {}) {
   const el = h("div", { class: "card" },
     h("div", { class: "card-head" },
       h("div", { class: "grow", style: "flex:1;min-width:0" },
-        h("h2", {}, cam.name), h("div", { class: "sub" }, cam.label || "USB camera")),
+        title, h("div", { class: "sub" }, cam.label || "USB camera")),
       status, options.single ? null : enabled),
     preview,
     h("div", { style: "height:14px" }),
