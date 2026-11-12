@@ -70,7 +70,7 @@ Software encoding (libx264) uses **about one of the four CPU cores at 1280×720 
 heatsink is recommended. **Every additional webcam needs about the same again** – two to
 three cameras are realistic on a Pi 4. Higher resolutions have not been measured – reduce
 resolution or frame rate under high load. Motion detection only runs while Home Assistant is subscribed to
-events. 1 GB of RAM is not the bottleneck.
+events or recording on motion is switched on. 1 GB of RAM is not the bottleneck.
 
 ---
 
@@ -247,6 +247,8 @@ new password; cameras and network settings are kept.
 ### Settings page
 
 The settings page is at **`http://<pi>.local`** (port 80) – log in with your password.
+
+<img src="docs/screenshots/login.png" alt="Login page" width="560">
 
 <table>
   <tr>
@@ -438,7 +440,8 @@ so Home Assistant gets **one** device with live view _and_ motion, without an MQ
 **How is motion detected?** ffmpeg extracts tiny grayscale frames (64×36) from the stream and
 `onvipi-onvif` measures the mean pixel difference between two frames. If it exceeds the
 threshold derived from the camera's sensitivity (with debouncing), it counts as motion. The analysis
-runs **only while Home Assistant is subscribed to events** – that saves power and CPU.
+runs **only while Home Assistant is subscribed to events or recording on motion is switched on** –
+that saves power and CPU.
 
 ### Services
 
