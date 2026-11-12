@@ -51,6 +51,11 @@ SERVICES = ["onvipi-go2rtc.service", "onvipi-onvif.service", "onvipi-wsd.service
 MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
         ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png",
         ".ico": "image/x-icon", ".json": "application/json"}
+# Livebild: nur diese Pfade von go2rtc (127.0.0.1:1984) werden unter /live/ durchgereicht –
+# der Player und das Abrufen von Streams, nichts, was go2rtc verändert.
+GO2RTC_PORT = 1984
+LIVE_RE = re.compile(r"/(stream\.html|video-rtc\.js|video-stream\.js|api/ws|api/webrtc|"
+                     r"api/stream\.mp4|api/stream\.m3u8|api/hls/[\w.-]+|api/frame\.jpeg)")
 HOSTNAME_RE = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
 
 
@@ -454,6 +459,8 @@ def make_handler(app):
                     return self.api(method, path[5:], query)
                 if path == system.Terminal.BASE or path.startswith(system.Terminal.BASE + "/"):
                     return self.terminal_proxy()
+                if path.startswith("/live/"):
+                    return self.live_proxy(path[5:])
                 if method != "GET":
                     return self.send(405)
                 if path.startswith("/static/"):
@@ -930,18 +937,33 @@ def make_handler(app):
                 return self.redirect("/")
             if not app.terminal.active():
                 return self.send(503, b"The terminal is switched off.\n", "text/plain")
+            self.tunnel(system.Terminal.PORT, self.requestline,
+                        lambda: app.terminal.active() and app.session_valid(self.token()))
+
+        def live_proxy(self, path):
+            """Livebild: go2rtcs Player und Streams (WebRTC/MSE-Signalisierung per WebSocket)."""
+            if system.configured() and not self.authenticated():
+                return self.send(401, b"Please log in.\n", "text/plain")
+            if self.command not in ("GET", "HEAD") or not LIVE_RE.fullmatch(path):
+                return self.send(404, b"Not found\n", "text/plain")
+            method, target, version = self.requestline.split(" ", 2)
+            # im Assistenten (noch kein Konto) offen, danach nur mit gültiger Sitzung
+            self.tunnel(GO2RTC_PORT, f"{method} {target[5:]} {version}",
+                        lambda: not system.configured() or app.session_valid(self.token()))
+
+        def tunnel(self, port, requestline, still_allowed):
+            """Reicht die Anfrage an einen lokalen Dienst durch (auch WebSocket-Verbindungen)."""
             upgrade = "upgrade" in (self.headers.get("Connection") or "").lower()
             if upgrade and not self.same_origin():
                 return self.send(403, b"Forbidden\n", "text/plain")
             try:
-                backend = socket.create_connection(("127.0.0.1", system.Terminal.PORT), timeout=5)
+                backend = socket.create_connection(("127.0.0.1", port), timeout=5)
             except OSError:
-                return self.send(503, b"The terminal is starting - please reload.\n",
-                                 "text/plain")
+                return self.send(503, b"Not ready yet - please reload.\n", "text/plain")
             self.close_connection = True
             client = self.connection
             try:
-                head = [self.requestline]
+                head = [requestline]
                 for key, value in self.headers.items():
                     if key.lower() in ("cookie", "connection", "proxy-connection"):
                         continue
@@ -954,7 +976,7 @@ def make_handler(app):
                 while True:
                     readable, _, _ = select.select([client, backend], [], [], 60)
                     if not readable:
-                        if not (app.terminal.active() and app.session_valid(self.token())):
+                        if not still_allowed():
                             break   # Frist abgelaufen oder abgemeldet
                         continue
                     for src, dst in ((client, backend), (backend, client)):

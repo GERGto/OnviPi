@@ -89,6 +89,36 @@ except ImportError:
         return GREY
 web.App.snapshot = staticmethod(snapshot)
 
+# ---------------------------------------------------------------- live view (stands in for go2rtc)
+import http.server  # noqa: E402
+
+PLAYER = b"""<!doctype html><meta charset=utf-8><style>
+html,body{margin:0;height:100%;background:#1c2c3e;overflow:hidden;font:600 4vw system-ui;color:#e6ecf2}
+i{position:absolute;inset:-50%;background:repeating-linear-gradient(115deg,#1c2c3e 0 40px,#263c54 40px 44px);
+animation:m 6s linear infinite}@keyframes m{to{transform:translateX(88px)}}
+p{position:absolute;left:4%;bottom:5%;margin:0}</style><i></i><p id=t></p><script>
+setInterval(function(){t.textContent="Demo live view - "+new Date().toLocaleTimeString()},500)</script>"""
+
+
+class FakePlayer(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        ok = self.path.startswith("/stream.html")
+        self.send_response(200 if ok else 404)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(PLAYER) if ok else 0))
+        self.end_headers()
+        if ok and self.command == "GET":
+            self.wfile.write(PLAYER)
+    do_HEAD = do_GET
+
+    def log_message(self, *a):
+        pass
+
+
+web.GO2RTC_PORT = args.port + 1000
+threading.Thread(target=http.server.ThreadingHTTPServer(("127.0.0.1", web.GO2RTC_PORT), FakePlayer).serve_forever,
+                 daemon=True).start()
+
 # ---------------------------------------------------------------- recordings
 rec_dir = os.path.join(conf_dir, "recordings")
 record.LOCAL_DIR = rec_dir

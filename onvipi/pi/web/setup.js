@@ -15,18 +15,31 @@ const A = {                // answers
   useWifi: true, iface: "", ssid: "", psk: "", hidden: false, secure: true,
 };
 
+let bar = null;            // buttons for the fixed action bar of the step being built
+let lastStep = -1;
+
 function show(step, ...content) {
   clear(document.getElementById("progress"),
     STEPS.map((_, i) => h("i", { class: i <= step ? "done" : "" })));
   document.getElementById("stepname").textContent =
-    step < STEPS.length ? `Step ${step + 1} of ${STEPS.length} · ${STEPS[step]}` : "";
+    step < STEPS.length ? `${step + 1} / ${STEPS.length}` : "";
+  // slide in from the side the user is moving to, like pages of an app
+  root.className = step === lastStep ? "" : step > lastStep ? "enter-next" : "enter-back";
+  lastStep = step;
   clear(root, content);
+  clear(document.getElementById("bar-inner"), bar);
+  document.getElementById("bar").classList.toggle("hidden", !bar);
+  document.body.classList.toggle("has-bar", !!bar);
+  bar = null;
   window.scrollTo(0, 0);
 }
 
+/* Back (left) and the main button (right) go into the fixed bar at the bottom –
+   always at the same place, whatever the length of the page. */
 function nav(back, next) {
-  return h("div", { class: "actions spread" },
-    back ? h("button", { class: "btn secondary", onclick: back }, "Back") : h("span"), next);
+  if (next) next.classList.add("grow");
+  bar = [back ? h("button", { class: "btn secondary back", onclick: back }, "Back") : null, next];
+  return null;
 }
 
 /* ------------------------------------------------------------------ 1 · Welcome */
@@ -39,8 +52,8 @@ function stepWelcome() {
     h("ul", { class: "checklist" },
       item("Name your camera and check the picture"),
       item("Choose a password"),
-      item("Connect the camera to your home network")),
-    h("button", { class: "btn block", onclick: stepCameras }, "Get started")));
+      item("Connect the camera to your home network"))),
+  nav(null, h("button", { class: "btn", onclick: stepCameras }, "Get started")));
 }
 
 /* ------------------------------------------------------------------ 2 · Camera */
@@ -63,10 +76,10 @@ async function stepCameras() {
       h("h1", { class: "center" }, "No camera found"),
       h("p", { class: "center muted" },
         "Plug a USB webcam into the Raspberry Pi, wait a few seconds and search again."),
-      h("button", { class: "btn block", onclick: stepCameras }, icon("refresh"), "Search again"),
       h("p", { class: "center small", style: "margin-top:14px" },
         h("a", { href: "#", onclick: (e) => { e.preventDefault(); stepPassword(); } },
-          "Continue without a camera – I will add one later"))));
+          "Continue without a camera – I will add one later"))),
+    nav(stepWelcome, h("button", { class: "btn", onclick: stepCameras }, icon("refresh"), "Search again")));
   }
   S.cameras = cams;
   const single = cams.length === 1;
@@ -75,7 +88,7 @@ async function stepCameras() {
     onApply: (btn) => busy(btn, async () => {
       await saveCameras();
       editors.forEach((e) => e.preview.reload && e.preview.reload(6000));
-      toast("Applied – the preview updates in a few seconds.");
+      toast("Applied – the live view restarts in a few seconds.");
     }),
   }));
   const next = h("button", { class: "btn", onclick: () => busy(next, async () => {
@@ -354,9 +367,9 @@ function showDone(progress) {
         progress.ip ? h("dt", {}, "IP address") : null, progress.ip ? h("dd", {}, progress.ip) : null),
       sameNetwork ? null : banner("info", "The setup Wi-Fi switches off in about a minute. ",
         "Connect your phone to your normal Wi-Fi again, then open the settings page."),
-      h("a", { class: "btn block", href: url }, "Open the settings page"),
       h("p", { class: "center muted small", style: "margin-top:12px" },
-        "Log in with your password. The page “Home Assistant” shows the next steps.")));
+        "Log in with your password. The page “Home Assistant” shows the next steps.")),
+    nav(null, h("a", { class: "btn", href: url }, "Open the settings page")));
 }
 
 async function watchProgress(drops) {
@@ -382,8 +395,8 @@ async function watchProgress(drops) {
 /* ------------------------------------------------------------------ Start */
 function failed(e) {
   if (e.status === 403) { location.replace("/"); return; }   // already set up
-  show(0, h("div", { class: "card" }, banner("error", e.message),
-    h("button", { class: "btn block", onclick: () => location.reload() }, "Try again")));
+  show(0, h("div", { class: "card" }, banner("error", e.message)),
+    nav(null, h("button", { class: "btn", onclick: () => location.reload() }, "Try again")));
 }
 
 (async function start() {

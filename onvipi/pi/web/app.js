@@ -110,13 +110,16 @@ function renderShell() {
     h("div", { class: "center", style: "padding:48px 0" }, h("div", { class: "spinner big" })));
   clear(appEl, h("div", { class: "shell" }, nav,
     h("div", { class: "main" },
-      h("div", { class: "topbar" }, brand(),
+      h("header", { class: "topbar" },
+        h("span", { class: "logo" }, icon(page.icon)),
+        h("div", { class: "topbar-title" }, h("b", {}, page.title), h("span", {}, state.name)),
         h("button", { class: "btn ghost small", onclick: logout, "aria-label": "Log out" }, icon("logout"))),
       content)));
   const render = async () => {
     try {
       const nodes = await page.render(render);
       if (currentPage() !== page || !content.isConnected) return;
+      content.classList.add("ready");
       clear(content, nodes);
     } catch (e) {
       if (e.status === 401) return;
@@ -195,7 +198,7 @@ async function pageOverview() {
           h("div", { style: "flex:1;min-width:0" }, h("h2", {}, c.name),
             h("div", { class: "sub" }, `${c.size} · ${c.fps} fps`)),
           h("span", { class: "badge " + (c.present ? "ok" : "error") }, c.present ? "Live" : "Not connected")),
-        c.present ? snapshot(c.id, { auto: 4000 }) : h("div", { class: "shot" },
+        c.present ? livePreview(c.id) : h("div", { class: "shot" },
           h("div", { class: "placeholder" }, "Plug the camera in again.")))))
       : h("div", { class: "card center" }, h("p", { class: "muted" }, "No camera is active."),
         h("a", { class: "btn", href: "#/cameras" }, "Set up a camera")),

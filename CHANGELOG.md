@@ -3,6 +3,21 @@
 All notable changes to OnviPi. Downloads are available under
 [Releases](https://github.com/GERGto/OnviPi/releases).
 
+## [2.2] – 2026-11-12
+
+### Changed
+- **App-like interface on phones.** In the setup wizard the buttons (*Back*, *Next*) sit in a
+  fixed bar at the bottom – always at the same place – with a fixed header and step
+  transitions. The settings interface has a fixed title bar, dialogs slide up from the
+  bottom, and pages no longer bounce or flash on tap.
+- **Live view instead of still pictures** in the wizard, on the overview and on the camera
+  cards. It runs through the settings page itself (port 80, same login); if the player is not
+  available, a picture that refreshes itself is shown.
+
+### Added
+- The settings page can be added to the phone's home screen and then opens like an app
+  (icon, no browser bars).
+
 ## [2.1] – 2026-11-12
 
 ### Added

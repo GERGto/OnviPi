@@ -4,17 +4,32 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
+<meta name="theme-color" content="#f3f5f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1319" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="OnviPi">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/icon-180.png">
 <title>OnviPi setup</title>
 <link rel="stylesheet" href="/static/ui.css?v=3">
 </head>
 <body>
+<header class="wizard-head">
+  <div class="wizard-inner">
+    <div class="brand"><span class="logo" id="logo"></span><span>OnviPi setup</span><span class="spacer"></span>
+      <span class="stepname" id="stepname"></span></div>
+    <div class="progress" id="progress"></div>
+  </div>
+</header>
 <main class="wizard">
-  <div class="brand"><span class="logo" id="logo"></span><span>OnviPi setup</span></div>
-  <div class="progress" id="progress"></div>
-  <div class="stepname" id="stepname"></div>
   <div id="step"><div class="card center"><div class="spinner big"></div>Loading …</div></div>
   <noscript><div class="card">This page needs JavaScript. Please enable it in your browser.</div></noscript>
 </main>
+<!-- The buttons always sit here, at the same place on every step -->
+<footer class="wizard-bar hidden" id="bar"><div class="wizard-inner" id="bar-inner"></div></footer>
 <script src="/static/ui.js?v=3"></script>
 <script src="/static/setup.js?v=3"></script>
 </body>

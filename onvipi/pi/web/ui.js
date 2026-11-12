@@ -282,6 +282,34 @@ function snapshot(camId, { auto } = {}) {
   return box;
 }
 
+/* Live picture: go2rtc's player (WebRTC, falling back to MSE/MP4) in a frame. If the
+   player is not reachable, a picture that refreshes itself every few seconds is shown instead. */
+function livePreview(camId) {
+  const box = h("div", { class: "shot" }, h("div", { class: "placeholder" }, "Starting live view …"));
+  const start = async () => {
+    let ok = false;
+    try { ok = (await fetch("/live/stream.html", { method: "HEAD", cache: "no-store" })).ok; } catch (e) { /* offline */ }
+    if (!box.isConnected && box.dataset.waited) return;
+    box.dataset.waited = "1";
+    if (!ok) {   // no player (e.g. the stream service is restarting): self-refreshing picture
+      const still = snapshot(camId, { auto: 3000 });
+      still.classList.add("auto");
+      box.replaceChildren(still);
+      return;
+    }
+    box.replaceChildren(
+      h("iframe", { src: `/live/stream.html?src=${encodeURIComponent(camId)}`, title: "Live view",
+        allow: "autoplay; fullscreen", loading: "lazy" }),
+      h("span", { class: "badge live-badge" }, h("i"), "Live"));
+  };
+  box.reload = (delay) => {
+    box.replaceChildren(h("div", { class: "placeholder" }, "Updating live view …"));
+    setTimeout(start, delay || 0);
+  };
+  setTimeout(start, 0);
+  return box;
+}
+
 const ROTATIONS = [[0, "Normal"], [90, "Portrait (rotated right)"], [180, "Upside down"],
   [270, "Portrait (rotated left)"]];
 const FORMAT_NAMES = { mjpeg: "MJPEG", h264: "H.264", yuyv422: "YUYV (uncompressed)" };
@@ -321,7 +349,7 @@ function cameraEditor(cam, options = {}) {
   size.onchange = () => fillFps(false);
   fillSize(true);
 
-  const preview = cam.enabled && cam.present && !cam.new ? snapshot(cam.id) : h("div", { class: "shot" },
+  const preview = cam.enabled && cam.present && !cam.new ? livePreview(cam.id) : h("div", { class: "shot" },
     h("div", { class: "placeholder" }, !cam.present ? "This camera is not connected."
       : cam.new ? "Add this camera to see its picture."
         : "The camera is switched off."));

@@ -274,6 +274,10 @@ The settings page is at **`http://<pi>.local`** (port 80) – log in with your p
 | **Terminal** | | command line in the browser ([ttyd](https://github.com/tsl0922/ttyd)) |
 
 - **Expert mode** is a switch at the bottom of the menu. It only shows or hides settings.
+- **Like an app:** on a phone, choose *Add to Home Screen* in the browser menu – the settings
+  page then opens full screen with its own icon.
+- **Live view:** overview and camera cards show the live stream (WebRTC, falling back to
+  MSE/MP4) through the settings page itself – no extra port needs to be opened in the browser.
 - **Fixed IP without lock-out:** new IP settings must be confirmed by reaching the page again
   (this happens automatically). Otherwise the previous settings return after three minutes.
 - **Terminal:** off by default. It is switched on for a limited time (15 minutes to 2 hours)
