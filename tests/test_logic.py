@@ -235,6 +235,20 @@ class Recording(unittest.TestCase):
         self.assertNotIn(".live", self.rec.command(cam(id="a"), CONF_DATA, "continuous")[-1])
 
 
+class Terminal(unittest.TestCase):
+    def test_shell_of_the_account_not_login(self):
+        import onvipi_system as system
+        real = system.login_users
+        system.login_users = lambda: ["admin"]
+        try:
+            cmd = system.Terminal.shell_command("admin")
+            self.assertEqual(cmd[1:], ["-l", "admin"])        # runuser/su, never `login`
+            self.assertEqual(system.Terminal.shell_command("evil"), ["login"])   # unknown user
+            self.assertEqual(system.Terminal.shell_command(""), ["login"])
+        finally:
+            system.login_users = real
+
+
 class Updates(unittest.TestCase):
     def setUp(self):
         self.calls = []

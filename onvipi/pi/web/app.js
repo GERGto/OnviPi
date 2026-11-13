@@ -961,7 +961,14 @@ async function pageSystem(rerender) {
     nodes.push(h("div", { class: "card" },
       h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Remote access"), h("div", { class: "sub" }, "For experts"))),
       h("div", { class: "field" }, ssh,
-        h("div", { class: "hint" }, `Log in as “${who}”`, s.login_user ? " with your OnviPi password." : " with the password of that system user.")),
+        h("div", { class: "hint" }, `Log in as “${who}”`, s.login_user ? " with your OnviPi password." : " with the password of that system user."),
+        s.ssh && s.ssh_keys.length ? h("details", { class: "more" },
+          h("summary", {}, "Fingerprint of this device"),
+          h("div", { class: "more-body" },
+            h("p", { class: "muted small" }, "When you connect for the first time, your SSH program shows one of these. ",
+              "If it warns that the key has changed – for example after re-flashing the SD card – remove the old entry ",
+              "on your computer with ", h("code", {}, `ssh-keygen -R ${location.hostname}`), "."),
+            s.ssh_keys.map((k) => h("div", {}, h("code", {}, k))))) : null),
       h("div", { class: "field" }, h("span", { class: "label" }, "Terminal in the browser"),
         h("div", { class: "row" },
           h("span", { class: "badge " + (s.terminal.active ? "warn" : "") },
@@ -1008,7 +1015,8 @@ async function pageTerminal(rerender) {
   return [head,
     h("div", { class: "card" },
       h("div", { class: "card-head" }, h("div", { style: "flex:1" }, h("h2", {}, "Terminal"),
-        h("div", { class: "sub" }, `Log in as “${who}”`, s.login_user ? " with your OnviPi password" : "")), left, off),
+        h("div", { class: "sub" }, s.login_user ? `Signed in as “${s.login_user}” · sudo asks for your OnviPi password`
+          : `Log in as “${who}”`)), left, off),
       h("iframe", { class: "terminal-frame", src: "/terminal/", title: "Terminal" }))];
 }
 

@@ -354,13 +354,29 @@ def reboot():
     subprocess.Popen(["systemctl", "reboot"])
 
 
+def ssh_fingerprints():
+    """Fingerabdrücke der SSH-Schlüssel dieses Geräts, z. B. ['ED25519 SHA256:kB/jc…']."""
+    out = []
+    for kind in ("ed25519", "ecdsa", "rsa"):
+        r = _run(["ssh-keygen", "-lf", f"/etc/ssh/ssh_host_{kind}_key.pub"], timeout=5)
+        parts = r.stdout.split()
+        if r.returncode == 0 and len(parts) >= 2:
+            out.append(f"{parts[-1].strip('()')} {parts[1]}")
+    return out
+
+
 # --------------------------------------------------------------------------- Terminal
 class Terminal:
     """Web-Terminal (ttyd) – standardmäßig aus, nur zeitlich begrenzt einschaltbar.
 
     ttyd lauscht nur auf 127.0.0.1; die Weboberfläche reicht es angemeldeten Benutzern
-    unter /terminal/ durch. Im Terminal meldet man sich mit dem OnviPi-Konto an.
-    Nach Ablauf der Frist und nach jedem Neustart ist es wieder aus.
+    unter /terminal/ durch. Nach Ablauf der Frist und nach jedem Neustart ist es wieder aus.
+
+    Wer die Weboberfläche nutzt, hat sich schon mit dem OnviPi-Konto angemeldet – das
+    Terminal öffnet deshalb direkt eine Shell dieses Kontos (runuser -l). Nicht `login`:
+    das trennt beim Start kurz das Terminal (vhangup), woran ttyd hängen bleibt – man sieht
+    nur einen Cursor. `login` bleibt nur als Notlösung, wenn es kein OnviPi-Konto gibt
+    (Paket-Installation); dann meldet man sich mit einem Benutzer des Systems an.
     """
     PORT = 7681
     BASE = "/terminal"
@@ -375,18 +391,27 @@ class Terminal:
     def available():
         return bool(shutil.which("ttyd"))
 
-    def start(self, minutes):
+    @staticmethod
+    def shell_command(user):
+        """Befehl, den ttyd für jede Verbindung startet."""
+        if user and user in login_users():
+            tool = shutil.which("runuser") or shutil.which("su") or "su"
+            return [tool, "-l", user]
+        return ["login"]
+
+    def start(self, minutes, user=None):
         minutes = max(5, min(240, int(minutes)))
         self.stop()
-        cmd = ["ttyd", "-i", "lo", "-p", str(self.PORT), "-b", self.BASE]
+        cmd = ["ttyd", "-i", "lo", "-p", str(self.PORT), "-b", self.BASE,
+               "-t", "titleFixed=OnviPi terminal", "-t", "disableLeaveAlert=true"]
         usage = _run(["ttyd", "--help"], timeout=5)
         if "--writable" in usage.stdout + usage.stderr:
             cmd.append("-W")   # ab ttyd 1.7.4 ist das Terminal sonst nur lesbar
-        cmd += ["login"]
+        cmd += self.shell_command(user)
         with self.lock:
             try:
-                self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                                             stderr=subprocess.DEVNULL)
+                # Ausgaben von ttyd ins Protokoll von onvipi-wifi (journalctl -u onvipi-wifi)
+                self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
             except OSError as ex:
                 return f"Could not start the terminal: {ex}"
             self.until = time.time() + minutes * 60

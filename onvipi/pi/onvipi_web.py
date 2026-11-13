@@ -757,6 +757,7 @@ def make_handler(app):
                 "password_hint": system.PASSWORD_HINT,
                 "timezone": system.current_timezone(), "timezones": system.timezones(),
                 "hostname": app.hostname(), "ssh": system.ssh_enabled(),
+                "ssh_keys": system.ssh_fingerprints() if system.ssh_enabled() else [],
                 "terminal": app.terminal.state(), "version": system.version()})
 
         def api_post_system_password(self, data):
@@ -796,7 +797,8 @@ def make_handler(app):
             if data.get("enable"):
                 if not app.terminal.available():
                     raise ApiError("The terminal (ttyd) is not installed on this device.")
-                err = app.terminal.start(data.get("minutes") or 30)
+                err = app.terminal.start(data.get("minutes") or 30,
+                                         load_conf(CONF).get("LOGIN_USER", ""))
                 if err:
                     raise ApiError(err)
                 log.info("Terminal enabled via web interface")

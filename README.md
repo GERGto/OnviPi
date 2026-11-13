@@ -285,6 +285,7 @@ go2rtc's own page (`1984`) is only reachable on the Pi itself.
 | **No sound** | Switch it on under *Cameras*; the option only appears if the microphone is recognised. HA plays sound only with WebRTC. |
 | **Locked out after changing the IP** | Wait three minutes – the previous settings come back. |
 | **Update fails** | The Pi needs internet access. *Updates* shows the reason; details with `journalctl -u onvipi-autoupdate -u onvipi-update`. |
+| **SSH: “REMOTE HOST IDENTIFICATION HAS CHANGED”** | Expected after flashing the SD card again: the camera has new keys. Remove the old entry on your computer with `ssh-keygen -R <ip>`. The current fingerprint is under *System → Remote access*. |
 | **Terminal “not installed”** | The download failed during installation – run the update again (*Updates*) with internet access. |
 
 ---

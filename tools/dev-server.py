@@ -227,6 +227,7 @@ system.set_timezone = lambda tz: sim.update(timezone=tz) or True
 system.set_country = lambda code: None
 system.set_hostname = lambda new: None
 system.ssh_enabled = lambda: sim["ssh"]
+system.ssh_fingerprints = lambda: ["ED25519 SHA256:kB/jcXYpmeFooFzB/DwQjrlSIObRx1DcmyW9XEoulpM"]
 system.set_ssh = lambda enable: sim.update(ssh=bool(enable)) or True
 system.users_with_password = lambda: ["admin"] if sim["configured"] else []
 system.set_login_password = lambda name, password: True

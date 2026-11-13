@@ -3,6 +3,18 @@
 All notable changes to OnviPi. Downloads are available under
 [Releases](https://github.com/GERGto/OnviPi/releases).
 
+## [2.5] – 2026-11-13
+
+### Fixed
+- **Browser terminal stayed blank** (only a cursor). It started `login`, which briefly
+  disconnects the terminal while starting; the terminal now opens a shell of your OnviPi
+  account directly – you are already signed in to the web interface. Messages of the terminal
+  program now go to the log.
+
+### Added
+- *System → Remote access* shows the SSH fingerprint of the device, with a hint for the
+  “host identification has changed” warning after re-flashing.
+
 ## [2.4] – 2026-11-13
 
 First release with feedback from real devices (Pi 4 and Pi 5).
