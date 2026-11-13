@@ -26,9 +26,14 @@ Arbeitsweise:
   * Je aktiver Kamera kopiert ein ffmpeg den vorhandenen H.264-Stream in Abschnitte
     (kein Neukodieren, kaum CPU). Fragmentiertes MP4: auch nach einem Stromausfall
     abspielbar, läuft direkt im Browser.
-  * "motion": Es wird durchgehend in 60-Sekunden-Abschnitten geschrieben und jeder
-    Abschnitt ohne Bewegung wieder gelöscht. So ist der Vorlauf vor der Bewegung
-    automatisch enthalten. Die Bewegung meldet onvipi_onvif über Marker-Dateien.
+  * "motion": Es wird durchgehend in 60-Sekunden-Abschnitten geschrieben – zunächst in
+    den versteckten Ordner <kamera-id>/.live. Erst wenn feststeht, dass im Abschnitt (oder
+    kurz danach) Bewegung war, wandert er zu den Aufnahmen; sonst wird er gelöscht. So
+    ist der Vorlauf vor der Bewegung enthalten, und in der Galerie stehen nur Clips mit
+    Anlass. Die Bewegung meldet onvipi_onvif (Marker-Datei + Ereignisprotokoll) – es sind
+    dieselben Ereignisse, die Home Assistant über ONVIF bekommt.
+  * Zu jeder Kamera liegt auf dem Speicher ein Ereignisprotokoll (events.log, je Zeile
+    "start ende spitzenwert"). Die Galerie zeigt damit, wann und warum aufgenommen wurde.
   * Ringspeicher: Altes wird nach REC_DAYS gelöscht und zusätzlich, sobald weniger als
     MIN_FREE des Speichers frei ist.
   * Zustand für die Oberfläche: STATUS (JSON).
@@ -64,6 +69,8 @@ POST_ROLL = 15            # Sekunden nach dem Abschnitt, in denen Bewegung ihn n
 MIN_FREE = 0.05           # Anteil, der frei bleiben soll …
 MIN_FREE_BYTES = 500 << 20   # … mindestens aber 500 MB
 FILE_RE = re.compile(r"(\d{8})-(\d{6})\.mp4")
+LIVE = ".live"            # Abschnitte, über die noch nicht entschieden ist (Modus "motion")
+EVENTS = "events.log"
 
 
 def run(cmd, timeout=30):
@@ -177,11 +184,47 @@ def start_of(name):
         return None
 
 
-def list_files(cam_id):
-    """[(start, name, größe)] einer Kamera, älteste zuerst."""
+def live_dir(cam_id):
+    return os.path.join(camera_dir(cam_id), LIVE)
+
+
+def read_events(path, since=0):
+    """[(start, ende, spitzenwert)] aus einem Ereignisprotokoll, älteste zuerst."""
+    events = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                try:
+                    start, end = float(parts[0]), float(parts[1])
+                    peak = float(parts[2]) if len(parts) > 2 else 0.0
+                except (IndexError, ValueError):
+                    continue
+                if end >= since:
+                    events.append((start, end, peak))
+    except OSError:
+        pass
+    return events
+
+
+def stored_events(cam_id, since=0):
+    """Ereignisse einer Kamera, wie sie auf dem Speicher bei den Aufnahmen liegen."""
+    return read_events(os.path.join(camera_dir(cam_id), EVENTS), since)
+
+
+def system_boot():
+    try:
+        with open("/proc/uptime") as f:
+            return time.time() - float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
+def list_files(cam_id, live=False):
+    """[(start, name, größe)] einer Kamera, älteste zuerst. live=True: unentschiedene Abschnitte."""
     items = []
     try:
-        with os.scandir(camera_dir(cam_id)) as it:
+        with os.scandir(live_dir(cam_id) if live else camera_dir(cam_id)) as it:
             for entry in it:
                 start = start_of(entry.name)
                 if start is not None:
@@ -210,6 +253,7 @@ class Recorder:
         self.procs = {}       # Kamera-ID -> ffmpeg
         self.started = {}     # Kamera-ID -> letzter Startversuch
         self.motion = {}      # Kamera-ID -> [Zeitpunkte mit Bewegung]
+        self.synced = {}      # Kamera-ID -> Ende des letzten ins Protokoll übernommenen Ereignisses
         self.boot = time.time()
         self.last_prune = 0
         self.paused = False   # Notbremse: Speicher voll, obwohl nichts mehr zu löschen ist
@@ -225,7 +269,8 @@ class Recorder:
                 "-f", "segment", "-segment_time", str(SEGMENT[mode]), "-segment_atclocktime", "1",
                 "-reset_timestamps", "1", "-strftime", "1", "-segment_format", "mp4",
                 "-segment_format_options", "movflags=+frag_keyframe+empty_moov+default_base_moof",
-                os.path.join(camera_dir(cam["id"]), "%Y%m%d-%H%M%S.mp4")]
+                os.path.join(live_dir(cam["id"]) if mode == "motion" else camera_dir(cam["id"]),
+                             "%Y%m%d-%H%M%S.mp4")]
 
     def ensure(self, cams, conf, mode):
         wanted = {c["id"]: c for c in cams}
@@ -239,7 +284,8 @@ class Recorder:
                 continue  # Stream noch nicht bereit -> nicht im Sekundentakt neu starten
             if not is_local() and not os.path.ismount(MOUNT):
                 return   # USB-Speicher fehlt: niemals ersatzweise auf die SD-Karte schreiben
-            os.makedirs(camera_dir(cam_id), exist_ok=True)
+            os.makedirs(live_dir(cam_id) if mode == "motion" else camera_dir(cam_id),
+                        exist_ok=True)
             self.started[cam_id] = time.time()
             try:
                 self.procs[cam_id] = subprocess.Popen(
@@ -272,22 +318,78 @@ class Recorder:
             while times and times[0] < now - 3600:
                 times.pop(0)
 
-    def drop_quiet(self, cams):
-        """Modus "motion": abgeschlossene Abschnitte ohne Bewegung löschen."""
-        now, seg = time.time(), SEGMENT["motion"]
+    def sync_events(self, cams):
+        """Neue Bewegungsereignisse zu den Aufnahmen auf den Speicher schreiben."""
         for cam in cams:
-            if not cam["motion"]:
-                continue   # ohne Bewegungserkennung alles behalten
-            files = list_files(cam["id"])
-            times = self.motion.get(cam["id"], [])
-            for (start, name, _), nxt in zip(files, files[1:] + [None]):
+            cam_id = cam["id"]
+            if cam_id not in self.synced:
+                stored = stored_events(cam_id)
+                self.synced[cam_id] = stored[-1][1] if stored else 0
+            fresh = [e for e in read_events(os.path.join(RUN_DIR, f"motion-{cam_id}.log"))
+                     if e[1] > self.synced[cam_id]]
+            if not fresh:
+                continue
+            try:
+                os.makedirs(camera_dir(cam_id), exist_ok=True)
+                with open(os.path.join(camera_dir(cam_id), EVENTS), "a", encoding="utf-8") as f:
+                    for start, end, peak in fresh:
+                        f.write(f"{start:.1f} {end:.1f} {peak:.1f}\n")
+                self.synced[cam_id] = fresh[-1][1]
+            except OSError:
+                pass
+
+    def trim_events(self, cam_id, days):
+        """Ereignisse, die älter sind als die Aufbewahrungsfrist, aus dem Protokoll nehmen."""
+        path = os.path.join(camera_dir(cam_id), EVENTS)
+        try:
+            if os.path.getsize(path) < 100000:
+                return
+        except OSError:
+            return
+        keep = read_events(path, time.time() - days * 86400)
+        try:
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                for start, end, peak in keep:
+                    f.write(f"{start:.1f} {end:.1f} {peak:.1f}\n")
+            os.replace(path + ".tmp", path)
+        except OSError:
+            pass
+
+    def settle(self, cams):
+        """Über abgeschlossene Abschnitte in .live entscheiden: behalten (verschieben) oder löschen.
+
+        Behalten wird, wenn im Abschnitt oder bis POST_ROLL Sekunden danach Bewegung war –
+        erkannt am Marker (laufendes Ereignis) oder am Ereignisprotokoll. Abschnitte, die
+        sich nicht beurteilen lassen (Kamera ohne Bewegungserkennung, Zeit vor dem letzten
+        Neustart des Pi), bleiben vorsichtshalber erhalten.
+        """
+        now, seg, boot = time.time(), SEGMENT["motion"], system_boot()
+        for cam in cams:
+            cam_id = cam["id"]
+            staged = list_files(cam_id, live=True)
+            if not staged:
+                continue
+            proc = self.procs.get(cam_id)
+            writing = bool(proc and proc.poll() is None)
+            points = self.motion.get(cam_id, [])
+            events = read_events(os.path.join(RUN_DIR, f"motion-{cam_id}.log"), staged[0][0] - 60)
+            for (start, name, _), nxt in zip(staged, staged[1:] + [None]):
+                if nxt is None and writing:
+                    continue   # wird gerade geschrieben
                 end = nxt[0] if nxt else start + seg
-                if nxt is None or start < self.boot or now < end + POST_ROLL + 5:
-                    continue   # läuft noch, stammt von vor dem Start, oder noch nicht entscheidbar
-                if now - end > 1800:
-                    continue   # längst entschieden
-                if not any(start <= t <= end + POST_ROLL for t in times):
-                    remove(os.path.join(camera_dir(cam["id"]), name))
+                if now < end + POST_ROLL + 5:
+                    continue   # Nachlauf abwarten
+                src = os.path.join(live_dir(cam_id), name)
+                keep = (not cam["motion"] or start < boot
+                        or any(start <= t <= end + POST_ROLL for t in points)
+                        or any(e[0] <= end + POST_ROLL and e[1] >= start for e in events))
+                if keep:
+                    try:
+                        os.replace(src, os.path.join(camera_dir(cam_id), name))
+                    except OSError:
+                        pass
+                else:
+                    remove(src)
 
     def prune(self, days, limit=0, force=False):
         """Ringspeicher. Löscht nacheinander: zu alte Aufnahmen, alles über der Obergrenze
@@ -479,13 +581,15 @@ def main():
         error = ""
         if rec.guard():
             rec.ensure(cams, conf, mode)
-            if mode == "motion":
-                rec.note_motion(cams)
-                rec.drop_quiet(cams)
         else:
             rec.stop()
             error = ("The storage is full with other data. Recording is paused and continues "
                      "as soon as there is free space again.")
+        rec.note_motion(cams)
+        rec.settle(cams)        # auch nach einem Wechsel des Modus: Reste in .live abarbeiten
+        rec.sync_events(cams)
+        for cam in cams:
+            rec.trim_events(cam["id"], days)
         total, free = usage()
         write_status(mode=mode, mounted=True, error=error, total=total, free=free,
                      local=is_local(), reserve=reserve(total), limit=limit,

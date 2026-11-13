@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# OnviPi – turns a Raspberry Pi with a USB webcam into an ONVIF camera for Home Assistant.
+# OnviPi – turns a Raspberry Pi with USB webcams into network cameras (web interface,
+# recording, ONVIF/RTSP for Home Assistant and other apps).
 #
 # Installation on an existing Raspberry Pi OS:
 #   sudo bash install.sh "Garden"                   # camera name (default: OnviPi)
@@ -58,6 +59,8 @@ cat <<EOF
  Settings:             http://$(hostname).local   (or http://$IP)
    Password: $CAM_PASSWORD        (change it under System)
  RTSP:                 rtsp://$CAM_USER:$CAM_PASSWORD@$IP:8554/onvipi
+
+ On its own: live view and recordings on the settings page above.
 
  Home Assistant → Settings → Devices & services → Add integration → ONVIF
    Select the device “$(echo "$CAM_NAME" | tr -c 'A-Za-z0-9_.\n-' '_')”

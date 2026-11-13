@@ -150,57 +150,92 @@ function promptDialog({ title, text, confirm, danger, password }) {
   });
 }
 
-/* Rectangles drawn on the camera picture (motion areas, privacy masks).
-   Values are relative to the picture (0-1), so they survive a change of resolution. */
+/* Rectangles on the camera picture (motion areas, privacy masks).
+   Draw a new one by dragging on the picture, move one by dragging it, resize it at its
+   corners. Values are relative to the picture (0-1), so they survive a change of resolution. */
 function zoneEditor(camId, zones, { kind, live }) {
+  const MIN = 0.03, SNAP = 0.02, MAX = 8;
   const list = (zones || []).map((z) => ({ ...z }));
   const layer = h("div", { class: "zone-layer" });
   const img = h("img", { alt: "", draggable: false });
   const box = h("div", { class: "zone-box " + kind }, img, layer);
   const count = h("span", { class: "muted small" });
   const pct = (v) => (v * 100).toFixed(2) + "%";
-  const render = () => {
-    clear(layer, list.map((z, i) => h("div", { class: "zone",
-      style: `left:${pct(z.x)};top:${pct(z.y)};width:${pct(z.w)};height:${pct(z.h)}` },
-    h("button", { type: "button", class: "zone-del", "aria-label": "Remove area",
-      onpointerdown: (e) => e.stopPropagation(),
-      onclick: (e) => { e.stopPropagation(); list.splice(i, 1); render(); } }, icon("close")))));
-    count.textContent = list.length ? `${list.length} of 8 areas` : "No area drawn";
+  const place = (el, z) => Object.assign(el.style,
+    { left: pct(z.x), top: pct(z.y), width: pct(z.w), height: pct(z.h) });
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  /* what is nearly at the edge belongs to the edge – no thin strip stays visible */
+  const snap = (z) => {
+    let x0 = z.x, y0 = z.y, x1 = z.x + z.w, y1 = z.y + z.h;
+    if (x0 < SNAP) x0 = 0;
+    if (y0 < SNAP) y0 = 0;
+    if (x1 > 1 - SNAP) x1 = 1;
+    if (y1 > 1 - SNAP) y1 = 1;
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
   };
-  let draft = null, origin = null;
+  const render = () => {
+    clear(layer, list.map((z, i) => {
+      const el = h("div", { class: "zone", "data-i": i },
+        h("button", { type: "button", class: "zone-del", "aria-label": "Remove area",
+          onpointerdown: (e) => e.stopPropagation(),
+          onclick: (e) => { e.stopPropagation(); list.splice(i, 1); render(); } }, icon("close")),
+        ["nw", "ne", "sw", "se"].map((c) => h("i", { class: "zone-handle " + c, "data-h": c })));
+      place(el, z);
+      return el;
+    }));
+    count.textContent = list.length ? `${list.length} of ${MAX} areas · drag to move, pull a corner to resize`
+      : "Drag on the picture to draw an area";
+  };
   const point = (e) => {
     const r = layer.getBoundingClientRect();
-    return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
-      y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) };
+    return { x: clamp((e.clientX - r.left) / r.width, 0, 1), y: clamp((e.clientY - r.top) / r.height, 0, 1) };
   };
+
+  let drag = null;   // {mode: "new" | "move" | corner, el, i, from: point, orig: zone}
   layer.addEventListener("pointerdown", (e) => {
-    if (list.length >= 8) return toast("At most 8 areas – remove one first.", "error");
-    origin = point(e);
-    draft = h("div", { class: "zone draft" });
-    layer.append(draft);
+    const zoneEl = e.target.closest(".zone");
+    const from = point(e);
+    if (zoneEl) {
+      const i = Number(zoneEl.dataset.i);
+      drag = { mode: e.target.dataset.h || "move", el: zoneEl, i, from, orig: { ...list[i] } };
+    } else {
+      if (list.length >= MAX) return toast(`At most ${MAX} areas – remove one first.`, "error");
+      const el = h("div", { class: "zone draft" });
+      layer.append(el);
+      drag = { mode: "new", el, i: -1, from, orig: { x: from.x, y: from.y, w: 0, h: 0 } };
+    }
     layer.setPointerCapture(e.pointerId);
     e.preventDefault();
   });
-  layer.addEventListener("pointermove", (e) => {
-    if (!draft) return;
-    const p = point(e);
-    Object.assign(draft.style, { left: pct(Math.min(p.x, origin.x)), top: pct(Math.min(p.y, origin.y)),
-      width: pct(Math.abs(p.x - origin.x)), height: pct(Math.abs(p.y - origin.y)) });
-  });
+  const shape = (p) => {
+    const o = drag.orig;
+    if (drag.mode === "move") {
+      return { x: clamp(o.x + p.x - drag.from.x, 0, 1 - o.w), y: clamp(o.y + p.y - drag.from.y, 0, 1 - o.h), w: o.w, h: o.h };
+    }
+    // new area or corner: the corner opposite to the one being pulled stays where it is
+    let ax = drag.from.x, ay = drag.from.y;
+    if (drag.mode !== "new") {
+      ax = drag.mode.includes("w") ? o.x + o.w : o.x;
+      ay = drag.mode.includes("n") ? o.y + o.h : o.y;
+    }
+    return { x: Math.min(ax, p.x), y: Math.min(ay, p.y), w: Math.abs(p.x - ax), h: Math.abs(p.y - ay) };
+  };
+  layer.addEventListener("pointermove", (e) => { if (drag) place(drag.el, shape(point(e))); });
   const finish = (e) => {
-    if (!draft) return;
-    const p = point(e);
-    const z = { x: Math.min(p.x, origin.x), y: Math.min(p.y, origin.y),
-      w: Math.abs(p.x - origin.x), h: Math.abs(p.y - origin.y) };
-    draft = null;
-    if (z.w >= 0.03 && z.h >= 0.03) list.push(z);
+    if (!drag) return;
+    const z = snap(shape(point(e)));
+    const d = drag;
+    drag = null;
+    if (z.w >= MIN && z.h >= MIN) {
+      if (d.mode === "new") list.push(z); else list[d.i] = z;
+    }   // too small: a new one is dropped, an existing one keeps its old shape
     render();
   };
   layer.addEventListener("pointerup", finish);
-  layer.addEventListener("pointercancel", () => { draft = null; render(); });
+  layer.addEventListener("pointercancel", () => { drag = null; render(); });
   img.onload = () => { box.style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`; };
-  if (live) img.src = `/api/snapshot?cam=${encodeURIComponent(camId)}&t=${Date.now()}`;
   img.onerror = () => { img.remove(); };
+  if (live) img.src = `/api/snapshot?cam=${encodeURIComponent(camId)}&t=${Date.now()}`;
   render();
   const el = h("div", {}, box,
     h("div", { class: "row", style: "margin-top:8px" }, count, h("span", { class: "spacer" }),
@@ -284,8 +319,21 @@ function snapshot(camId, { auto } = {}) {
 
 /* Live picture: go2rtc's player (WebRTC, falling back to MSE/MP4) in a frame. If the
    player is not reachable, a picture that refreshes itself every few seconds is shown instead. */
-function livePreview(camId) {
+function pictureShape(cam) {
+  const [w, hgt] = String(cam.size || "16x9").split("x").map(Number);
+  const turned = cam.rotate === 90 || cam.rotate === 270;
+  return turned ? [hgt || 9, w || 16] : [w || 16, hgt || 9];
+}
+
+function livePreview(camId, shape) {
   const box = h("div", { class: "shot" }, h("div", { class: "placeholder" }, "Starting live view …"));
+  if (shape) {
+    box.style.aspectRatio = `${shape[0]} / ${shape[1]}`;
+    if (shape[1] > shape[0]) {   // portrait: as tall as is comfortable, centred
+      box.style.maxWidth = `calc(min(70vh, 640px) * ${shape[0]} / ${shape[1]})`;
+      box.style.marginInline = "auto";
+    }
+  }
   const start = async () => {
     let ok = false;
     try { ok = (await fetch("/live/stream.html", { method: "HEAD", cache: "no-store" })).ok; } catch (e) { /* offline */ }
@@ -328,6 +376,28 @@ function cameraEditor(cam, options = {}) {
   const sensLabel = h("span", {}, String(cam.sensitivity));
   const sens = h("input", { type: "range", min: 0, max: 100, value: cam.sensitivity,
     oninput: () => { sensLabel.textContent = sens.value; } });
+  /* Live reading of the detector: the bar is the movement right now, the line the level at
+     which it triggers. Makes it visible why (or why not) something counts as movement. */
+  const level = h("span");
+  const mark = h("i");
+  const levelText = h("span", { class: "muted small" }, "Movement right now: waiting for the detector …");
+  const meter = h("div", { class: "field" }, h("div", { class: "motion-meter" }, level, mark), levelText);
+  const showMotion = (st) => {
+    if (!st || !st.analysing) {
+      level.style.width = "0";
+      mark.style.display = "none";
+      levelText.textContent = st ? "The detector is idle. It runs while recording is on or an app is listening for movement."
+        : "Movement right now: no reading yet.";
+      return;
+    }
+    const scale = Math.max(st.threshold * 2.5, 1);
+    level.style.width = Math.min(100, 100 * st.score / scale) + "%";
+    level.className = st.motion ? "on" : "";
+    mark.style.display = "";
+    mark.style.left = Math.min(100, 100 * st.threshold / scale) + "%";
+    levelText.textContent = st.motion ? "Movement detected right now."
+      : "No movement. The bar must pass the line to count (saved sensitivity).";
+  };
 
   const audio = toggle("Sound from the camera’s microphone", cam.audio);
   const substream = toggle("Extra low-resolution stream", cam.substream);
@@ -352,7 +422,7 @@ function cameraEditor(cam, options = {}) {
   size.onchange = () => fillFps(false);
   fillSize(true);
 
-  const preview = cam.enabled && cam.present && !cam.new ? livePreview(cam.id) : h("div", { class: "shot" },
+  const preview = cam.enabled && cam.present && !cam.new ? livePreview(cam.id, pictureShape(cam)) : h("div", { class: "shot" },
     h("div", { class: "placeholder" }, !cam.present ? "This camera is not connected."
       : cam.new ? "Add this camera to see its picture."
         : "The camera is switched off."));
@@ -367,11 +437,12 @@ function cameraEditor(cam, options = {}) {
       status, options.single ? null : enabled),
     preview,
     h("div", { style: "height:14px" }),
-    field("Name", name, "Shown in Home Assistant, e.g. “Garden” or “Garage”."),
+    field("Name", name, "For example “Garden” or “Garage”. Connected apps show this name too."),
     options.motion ? h("div", {},
       h("div", { class: "field" }, motion),
       field(h("span", {}, "Sensitivity: ", sensLabel), sens,
-        "Higher reacts to smaller movements. Lower it if it triggers all the time.")) : null,
+        "Higher reacts to smaller movements. Lower it if it triggers all the time."),
+      cam.new ? null : meter) : null,
     motionZones ? h("details", { class: "more" },
       h("summary", {}, "Motion areas", cam.motion_zones.length ? ` (${cam.motion_zones.length})` : ""),
       h("div", { class: "more-body" },
@@ -404,7 +475,7 @@ function cameraEditor(cam, options = {}) {
             onclick: (e) => options.onApply(e.currentTarget) }, "Apply and update preview")) : null)));
 
   return {
-    el, preview,
+    el, preview, showMotion,
     value() {
       const v = { id: cam.id, device: cam.device, name: name.value.trim() || cam.name,
         enabled: options.single ? true : enabled.input.checked,

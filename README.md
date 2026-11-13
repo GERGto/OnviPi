@@ -2,9 +2,10 @@
 
 # 📷 OnviPi
 
-**Turn a Raspberry Pi and USB webcams into ONVIF cameras for Home Assistant**
+**Turn a Raspberry Pi and USB webcams into network cameras – on their own or for Home Assistant**
 
-Live view, motion sensor and local recording – no cloud, no subscription.
+Live view, motion detection and local recording in the browser. ONVIF and RTSP for Home
+Assistant and other apps. No cloud, no subscription.
 
 [![Release](https://img.shields.io/github/v/release/GERGto/OnviPi?label=Release)](https://github.com/GERGto/OnviPi/releases/latest)
 [![Build](https://img.shields.io/github/actions/workflow/status/GERGto/OnviPi/release.yml?label=Build)](https://github.com/GERGto/OnviPi/actions/workflows/release.yml)
@@ -18,7 +19,8 @@ Live view, motion sensor and local recording – no cloud, no subscription.
 
 ---
 
-- 📹 **Live view and motion sensor** in Home Assistant via ONVIF
+- 🖥️ **Works on its own:** live view, motion detection, recordings – all in the web interface
+- 📹 **Works with Home Assistant** (live view + motion sensor) and any ONVIF/RTSP app or recorder
 - 🎥 **Several webcams on one Pi** – each one is its own camera
 - ⏺️ **Local recording** to USB storage or the SD card, with a gallery in the browser
 - 🕶️ **Motion areas, privacy masks, sound** and an optional low-resolution stream
@@ -28,7 +30,7 @@ Live view, motion sensor and local recording – no cloud, no subscription.
 ## Contents
 
 1. [Requirements](#1-requirements) · 2. [Installation](#2-installation) ·
-3. [Setup wizard](#3-setup-wizard) · 4. [Home Assistant](#4-home-assistant) ·
+3. [Setup wizard](#3-setup-wizard) · 4. [Connecting](#4-connecting) ·
 5. [Web interface](#5-web-interface) · 6. [Reference](#6-reference) ·
 7. [Troubleshooting](#7-troubleshooting) · 8. [Security](#8-security) ·
 9. [Development](#9-development)
@@ -111,7 +113,17 @@ Five short steps; everything else has a sensible default behind *More options*.
 
 ---
 
-## 4. Home Assistant
+## 4. Connecting
+
+**On its own:** nothing to do. Open `http://onvipi-<name>.local` – live view, recordings and all
+settings are there. *Add to Home Screen* makes it feel like an app.
+
+**Other apps and recorders** (NVR, NAS, VLC, …): the page *Connect* lists the addresses with a
+copy button – ONVIF `<ip>:8000`, video `rtsp://user:password@<ip>:8554/onvipi`, still picture
+`http://<ip>:8000/snapshot.jpg`.
+
+**Home Assistant:**
+
 
 1. **Settings → Devices & services → Add integration → ONVIF**
 2. Select the camera, enter the username `admin` and your password.
@@ -119,7 +131,7 @@ Five short steps; everything else has a sensible default behind *More options*.
 3. Repeat for further webcams (ports `8001`, `8002`, …).
 
 You get a **camera entity** and a **motion sensor** per webcam. Afterwards Home Assistant finds
-the camera by its ID, even with a new IP address. The page *Home Assistant* of the web interface
+the camera by its ID, even with a new IP address. The page *Connect* of the web interface
 shows these steps with your names and ports.
 
 | In Home Assistant | Effect |
@@ -130,7 +142,7 @@ shows these steps with your names and ports.
 | Second camera entity (disabled) | the optional low-resolution stream, if switched on |
 
 The ONVIF integration has no IP sensor. With the optional MQTT connection (expert mode →
-*Home Assistant*) IP address, CPU temperature and Wi-Fi signal appear as sensors in the same device.
+*Connect*) IP address, CPU temperature and Wi-Fi signal appear as sensors in the same device.
 
 ---
 
@@ -153,15 +165,18 @@ The ONVIF integration has no IP sensor. With the optional MQTT connection (exper
 | **Cameras** | on/off, name, motion detection, motion areas, privacy masks, picture and sound | ONVIF port, RTSP address, device ID |
 | **Recordings** | gallery by camera and day: watch, download, delete; recording settings | |
 | **Network** | connections, change Wi-Fi, choose the Wi-Fi adapter | fixed IP, hostname, Wi-Fi country |
-| **Home Assistant** | instructions with your names and ports | MQTT sensors |
+| **Connect** | use on its own, Home Assistant step by step, addresses for other apps | MQTT sensors |
 | **Updates** | installed version, check for updates, automatic updates on/off | |
 | **System** | password, time zone, restart, log, backup/restore, factory reset | SSH |
 | **Terminal** | | command line in the browser, switched on for a limited time |
 
 ### Cameras
 
-- **Motion areas** – draw rectangles on the picture; only movement inside counts.
-- **Privacy masks** – blacked-out rectangles, also hidden in Home Assistant and in recordings.
+- **Motion detection** – a live bar shows the movement right now and the level at which it
+  triggers, so the sensitivity can be set by watching it.
+- **Motion areas** – draw rectangles on the picture; only movement inside counts. Areas can be
+  moved and resized at their corners.
+- **Privacy masks** – blacked-out rectangles, also hidden in connected apps and in recordings.
 - **Sound** – from the webcam's microphone (off by default).
 - **Extra low-resolution stream** – 640 px wide, for slow connections; uses CPU only while watched.
 
@@ -179,6 +194,10 @@ the oldest recordings go first – even before the days are over. A reserve alwa
 (USB: 5 %, at least 500 MB · SD card: 15 %, at least 2 GB). If other data fills the storage,
 recording pauses and continues by itself. Only OnviPi's own recordings are ever deleted, and
 without the USB storage nothing is written to the SD card instead.
+
+**Why is there a clip?** With *When something moves* a clip only appears in the gallery if the
+camera saw movement during it (or right after – the lead-in). Each clip shows its movements
+with time and duration. These are the same movements Home Assistant gets as motion sensor.
 
 Clips are ordinary MP4 files (`onvipi/<camera>/YYYYMMDD-HHMMSS.mp4`), written without re-encoding.
 A USB stick can be read on any computer.
@@ -259,13 +278,14 @@ go2rtc's own page (`1984`) is only reachable on the Pi itself.
 | **HA does not find the camera** | Same network, no guest Wi-Fi; otherwise add it manually with host and port. |
 | **Added in HA, but no picture** | Wrong password – choose *Reconfigure* on the ONVIF device. |
 | **Picture stutters / Pi is hot** | Lower resolution or frame rate under *Cameras → Picture and sound*, or switch a camera off. |
-| **Motion never / always triggers** | Adjust sensitivity and motion areas under *Cameras*. |
+| **Motion never / always triggers** | Watch the live bar under *Cameras* and adjust sensitivity and motion areas. |
+| **Router shows an old name** (e.g. FRITZ!Box “picam”) | Routers remember the name a device first reported. Rename it in the router's device list; OnviPi itself reports its current hostname. |
 | **Second webcam missing** | Open *Cameras* and add it. Identical webcams without serial number must stay on the same USB ports. |
 | **Recording is not running** | The *Recordings* page shows the reason. USB storage needs a file system (ext4, exFAT, FAT32, NTFS). |
 | **No sound** | Switch it on under *Cameras*; the option only appears if the microphone is recognised. HA plays sound only with WebRTC. |
 | **Locked out after changing the IP** | Wait three minutes – the previous settings come back. |
 | **Update fails** | The Pi needs internet access. *Updates* shows the reason; details with `journalctl -u onvipi-autoupdate -u onvipi-update`. |
-| **Terminal “not installed”** | `sudo apt install ttyd` |
+| **Terminal “not installed”** | The download failed during installation – run the update again (*Updates*) with internet access. |
 
 ---
 

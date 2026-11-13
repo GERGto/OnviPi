@@ -14,7 +14,7 @@ const PAGES = [
   { id: "cameras", title: "Cameras", icon: "camera", render: pageCameras },
   { id: "recordings", title: "Recordings", icon: "film", render: pageRecordings },
   { id: "network", title: "Network", icon: "wifi", render: pageNetwork },
-  { id: "homeassistant", title: "Home Assistant", short: "Home Asst.", icon: "link", render: pageHomeAssistant },
+  { id: "connect", title: "Connect", icon: "link", render: pageConnect },
   { id: "updates", title: "Updates", icon: "download", render: pageUpdates },
   { id: "system", title: "System", icon: "sliders", render: pageSystem },
   { id: "terminal", title: "Terminal", icon: "terminal", render: pageTerminal, expert: true },
@@ -146,6 +146,15 @@ async function confirmIpChange(info) {
 }
 
 /* ------------------------------------------------------------------ overview */
+function lastMotion(c) {
+  const st = c.state;
+  if (!c.motion) return " · motion detection off";
+  if (!st || !st.analysing) return "";
+  if (st.motion) return " · movement right now";
+  if (!st.last) return " · no movement so far";
+  return " · last movement " + new Date(st.last[1] * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
 function tile(name, value, percent, level) {
   return h("div", { class: "tile" }, h("div", { class: "value" }, value), h("div", { class: "name" }, name),
     percent === undefined || percent === null ? null
@@ -199,9 +208,10 @@ async function pageOverview() {
       active.map((c) => h("div", { class: "card" },
         h("div", { class: "card-head" },
           h("div", { style: "flex:1;min-width:0" }, h("h2", {}, c.name),
-            h("div", { class: "sub" }, `${c.size} · ${c.fps} fps`)),
+            h("div", { class: "sub" }, `${c.size} · ${c.fps} fps`, lastMotion(c))),
+          s.recording.active.includes(c.id) ? h("span", { class: "badge accent" }, "Recording") : null,
           h("span", { class: "badge " + (c.present ? "ok" : "error") }, c.present ? "Live" : "Not connected")),
-        c.present ? livePreview(c.id) : h("div", { class: "shot" },
+        c.present ? livePreview(c.id, pictureShape(c)) : h("div", { class: "shot" },
           h("div", { class: "placeholder" }, "Plug the camera in again.")))))
       : h("div", { class: "card center" }, h("p", { class: "muted" }, "No camera is active."),
         h("a", { class: "btn", href: "#/cameras" }, "Set up a camera")),
@@ -221,8 +231,20 @@ async function pageOverview() {
 async function pageCameras(rerender) {
   const data = await api("cameras");
   const activeCount = data.cameras.filter((c) => c.enabled).length;
+  const editors = [];
+  const pollMotion = async () => {   // live reading for the meters under the sensitivity sliders
+    if (!editors.length || !editors[0].el.isConnected) return;
+    try {
+      const st = await api("motion");
+      editors.forEach((e) => e.showMotion(st[e.id]));
+    } catch (e) { /* next round */ }
+    pageTimer = setTimeout(pollMotion, 1500);
+  };
+  pageTimer = setTimeout(pollMotion, 800);
   const cards = data.cameras.map((cam) => {
     const ed = cameraEditor(cam, { motion: true });
+    ed.id = cam.id;
+    if (!cam.new) editors.push(ed);
     const save = h("button", { class: "btn", onclick: () => busy(save, async () => {
       await api("cameras", { cameras: [ed.value()] });
       toast("Saved. The picture restarts – this takes a few seconds.");
@@ -231,7 +253,7 @@ async function pageCameras(rerender) {
     }) }, cam.new ? "Add camera" : "Save");
     const remove = !cam.present && !cam.new ? h("button", { class: "btn secondary", onclick: async () => {
       if (!await confirmDialog({ title: `Remove “${cam.name}”?`, danger: true, confirm: "Remove",
-        text: "The camera disappears from this list. In Home Assistant you have to delete the device yourself." })) return;
+        text: "The camera disappears from this list. In connected apps such as Home Assistant you have to delete the device yourself." })) return;
       busy(remove, async () => { await api("cameras/remove", { id: cam.id }); rerender(); });
     } }, "Remove") : null;
     if (expert && !cam.new) {
@@ -246,10 +268,10 @@ async function pageCameras(rerender) {
     return ed.el;
   });
   return [
-    pageHead("Cameras", "Every active camera appears in Home Assistant as its own device with live view and motion sensor."),
+    pageHead("Cameras", "Picture, movement and privacy for every camera. Connected apps see each active camera as its own device."),
     activeCount >= 2 ? banner("info", `${activeCount} cameras are active. Each one needs computing power – `,
       "if the picture stutters, lower the resolution or frame rate under “Picture options”.") : null,
-    cards.length ? h("div", { class: "cams" + (cards.length > 1 ? " multi" : "") }, cards)
+    cards.length ? h("div", { class: "cams" + (cards.length > 1 ? " multi" : " narrow") }, cards)
       : h("div", { class: "card center" }, h("div", { class: "hero" }, icon("camera")),
         h("h2", {}, "No camera found"),
         h("p", { class: "muted" }, "Plug a USB webcam into the Raspberry Pi and search again."),
@@ -417,15 +439,41 @@ async function pageNetwork(rerender) {
   return nodes;
 }
 
-/* ------------------------------------------------------------------ Home Assistant */
-async function pageHomeAssistant(rerender) {
+/* ------------------------------------------------------------------ connect */
+function copyField(text) {
+  const btn = h("button", { type: "button", class: "btn secondary small", "aria-label": "Copy", onclick: () => {
+    const done = () => toast("Copied.");
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text).then(done);
+    const area = h("textarea", { value: text, style: "position:fixed;opacity:0" });
+    document.body.append(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+    done();
+  } }, icon("copy"));
+  return h("div", { class: "input-group" }, h("code", { style: "flex:1;padding:9px 10px" }, text), btn);
+}
+
+async function pageConnect(rerender) {
   const d = await api("homeassistant");
   const many = d.cameras.length > 1;
+  const host = d.ip || d.hostname + ".local";
+  const linked = d.cameras.some((c) => c.subscribed);
   const nodes = [
-    pageHead("Home Assistant", "Add the camera once – afterwards Home Assistant finds it by itself, even with a new IP address."),
+    pageHead("Connect", "Use the camera on its own, with Home Assistant, or with any app that speaks ONVIF or RTSP."),
     !d.cameras.length ? banner("warn", "No camera is active yet. Set one up under ", h("a", { href: "#/cameras" }, "Cameras"), " first.") : null,
     h("div", { class: "card" },
-      h("div", { class: "card-head" }, h("h2", {}, "Add to Home Assistant")),
+      h("div", { class: "card-head" }, h("div", { style: "flex:1" }, h("h2", {}, "On its own"),
+        h("div", { class: "sub" }, "Nothing else is needed"))),
+      h("ul", { class: "checklist" },
+        h("li", {}, icon("check"), h("span", {}, h("b", {}, "Watch live"), " on the ", h("a", { href: "#/overview" }, "overview"), " – from any phone or computer in your home network.")),
+        h("li", {}, icon("check"), h("span", {}, h("b", {}, "Record"), " when something moves or all the time, and look through the clips under ",
+          h("a", { href: "#/recordings" }, "Recordings"), ".")),
+        h("li", {}, icon("check"), h("span", {}, h("b", {}, "Like an app:"), " choose “Add to Home Screen” in your phone’s browser menu.")))),
+    h("div", { class: "card" },
+      h("div", { class: "card-head" }, h("div", { style: "flex:1" }, h("h2", {}, "Home Assistant"),
+        h("div", { class: "sub" }, "Live view and a motion sensor for each camera")),
+        d.cameras.length ? h("span", { class: "badge " + (linked ? "ok" : "") }, linked ? "Connected" : "Not connected") : null),
       h("ol", { class: "steps" },
         h("li", {}, "In Home Assistant open ", h("b", {}, "Settings → Devices & services"), "."),
         h("li", {}, "Choose ", h("b", {}, "Add integration"), " and search for ", h("b", {}, "ONVIF"), "."),
@@ -433,25 +481,35 @@ async function pageHomeAssistant(rerender) {
           d.cameras.map((c, i) => [i ? ", " : "", h("b", {}, `“${c.onvif_name}”`)]), "."),
         h("li", {}, "Enter the username ", h("code", {}, d.user), " and your OnviPi password."),
         many ? h("li", {}, "Repeat this for every camera.") : null),
-      h("p", { class: "muted small" }, "You get a live picture and a motion sensor for each camera."),
       h("details", { class: "more" }, h("summary", {}, "The camera is not listed?"),
         h("div", { class: "more-body" },
           h("p", {}, "Home Assistant and the camera must be in the same network (no guest Wi-Fi). Otherwise choose ",
             h("b", {}, "Configure manually"), " and enter:"),
           h("dl", { class: "kv" },
-            h("dt", {}, "Host"), h("dd", {}, h("code", {}, d.ip || d.hostname + ".local")),
+            h("dt", {}, "Host"), h("dd", {}, h("code", {}, host)),
             d.cameras.map((c) => [h("dt", {}, many ? `Port for “${c.name}”` : "Port"), h("dd", {}, h("code", {}, String(c.port)))]),
-            h("dt", {}, "Username"), h("dd", {}, h("code", {}, d.user)))))),
+            h("dt", {}, "Username"), h("dd", {}, h("code", {}, d.user))))),
+      h("details", { class: "more" }, h("summary", {}, "Good to know"),
+        h("div", { class: "more-body" }, h("ul", { class: "checklist" },
+          h("li", {}, icon("check"), h("span", {}, "The motion sensor in Home Assistant and the recordings here react to the same movements.")),
+          h("li", {}, icon("check"), h("span", {}, "The button ", h("b", {}, "Reboot"), " restarts the whole Raspberry Pi",
+            many ? " – all cameras together." : ".")),
+          h("li", {}, icon("check"), h("span", {}, h("b", {}, "Set system date and time"),
+            " is only needed in a network without internet.")),
+          h("li", {}, icon("check"), h("span", {}, "After changing the password here, choose ", h("b", {}, "Reconfigure"),
+            " on the ONVIF device.")))))),
     h("div", { class: "card" },
-      h("div", { class: "card-head" }, h("h2", {}, "Good to know")),
-      h("ul", { class: "checklist" },
-        h("li", {}, icon("check"), h("span", {}, "The button ", h("b", {}, "Reboot"), " in Home Assistant restarts the whole Raspberry Pi",
-          many ? " – all cameras together." : ".")),
-        h("li", {}, icon("check"), h("span", {}, h("b", {}, "Set system date and time"),
-          " sets the camera clock from Home Assistant. It is only needed in a network without internet.")),
-        h("li", {}, icon("check"), h("span", {}, "The link ", h("b", {}, "Visit"), " on the device page in Home Assistant opens this settings page.")),
-        h("li", {}, icon("check"), h("span", {}, "After changing the password here, choose ", h("b", {}, "Reconfigure"),
-          " on the ONVIF device in Home Assistant.")))),
+      h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Other apps and recorders"),
+        h("div", { class: "sub" }, "Anything that speaks ONVIF or RTSP: recorders (NVR), NAS, VLC, …"))),
+      h("p", { class: "muted small" }, "Username ", h("code", {}, d.user), " and your OnviPi password. Put them in where it says “user:password”."),
+      d.cameras.map((c) => h("div", { class: "field" },
+        h("span", { class: "label" }, many ? c.name : "Addresses"),
+        h("dl", { class: "kv" },
+          h("dt", {}, "ONVIF"), h("dd", {}, copyField(`${host}:${c.port}`)),
+          h("dt", {}, "Video (RTSP)"), h("dd", {}, copyField(`rtsp://user:password@${host}:8554/${c.id}`)),
+          c.substream ? h("dt", {}, "Small video") : null,
+          c.substream ? h("dd", {}, copyField(`rtsp://user:password@${host}:8554/${c.id}_sub`)) : null,
+          h("dt", {}, "Still picture"), h("dd", {}, copyField(`http://${host}:${c.port}/snapshot.jpg`)))))),
   ];
   if (expert) {
     const m = d.mqtt;
@@ -466,7 +524,7 @@ async function pageHomeAssistant(rerender) {
       rerender();
     }) }, "Save");
     nodes.push(h("div", { class: "card" },
-      h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Diagnostic sensors via MQTT"), h("div", { class: "sub" }, "Optional – needs an MQTT broker in Home Assistant"))),
+      h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Diagnostic sensors via MQTT"), h("div", { class: "sub" }, "For Home Assistant · optional, needs an MQTT broker"))),
       h("p", { class: "muted small" }, "Adds IP address, processor temperature and Wi-Fi signal as sensors to the camera device in Home Assistant. ",
         "Leave everything empty to switch it off."),
       h("div", { class: "fields two" }, field("Broker address", host), field("Port", port)),
@@ -498,8 +556,15 @@ function storageName(st) {
   return `${st.label || st.model} · ${formatBytes(st.size)}`;
 }
 
-function playClip(cam, files, index, onDelete) {
+/* Movements that belong to a clip: from its start to the start of the next (newer) clip. */
+function eventsOf(file, newer, events) {
+  const end = newer ? newer.start : file.start + 300;
+  return (events || []).filter((e) => e[0] < end && e[1] >= file.start);
+}
+
+function playClip(cam, files, index, onDelete, events) {
   let i = index;
+  const why = h("p", { class: "muted small", style: "margin:10px 0 0" });
   const video = h("video", { controls: true, autoplay: true, playsInline: true });
   const title = h("h2", { style: "flex:1;margin:0" });
   const url = () => `/recordings/${cam.id}/${files[i].name}`;
@@ -508,6 +573,12 @@ function playClip(cam, files, index, onDelete) {
     video.src = url();
     download.href = url() + "?download=1";
     title.textContent = `${cam.name} · ${new Date(files[i].start * 1000).toLocaleString()}`;
+    const list = eventsOf(files[i], files[i - 1], events);
+    const t = (sec) => new Date(sec * 1000).toLocaleTimeString();
+    why.textContent = list.length
+      ? "Movement: " + list.map((e) => `${t(e[0])} (${Math.max(1, e[1] - e[0])} s)`).join(", ")
+      : (events && events.length ? "No movement in this clip – kept as the lead-in or follow-up of a movement, or recorded all the time."
+        : "");
     older.disabled = i >= files.length - 1;
     newer.disabled = i <= 0;
   };
@@ -523,7 +594,7 @@ function playClip(cam, files, index, onDelete) {
     h("div", { class: "modal player", role: "dialog", "aria-modal": "true" },
       h("div", { class: "row", style: "margin-bottom:10px" }, title,
         h("button", { class: "btn ghost small", onclick: close, "aria-label": "Close" }, icon("close"))),
-      video,
+      video, why,
       h("div", { class: "actions spread" }, h("div", { class: "row" }, older, newer),
         h("div", { class: "row" }, download, del))));
   document.body.append(back);
@@ -560,7 +631,7 @@ async function pageRecordings(rerender) {
     h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Recording settings"),
       h("div", { class: "sub" }, "Recordings are stored on the camera itself – no cloud."))),
     h("div", { class: "fields two" },
-      field("Record", mode, "“When something moves” also keeps the seconds before the movement."),
+      field("Record", mode, "“When something moves” keeps a clip only if the camera saw movement – including the seconds before it."),
       field("Store on", storage, d.storages.length > 1 ? null
         : "No USB storage found – plug in a USB stick or SSD to use it instead of the SD card.")),
     sdNote,
@@ -606,7 +677,7 @@ async function pageRecordings(rerender) {
 
   // ---- gallery
   const withClips = d.cameras.filter((c) => c.days.length);
-  const view = { cam: (withClips[0] || d.cameras[0] || {}).id, day: null, picking: false, picked: new Set(), files: [], shown: 60 };
+  const view = { cam: (withClips[0] || d.cameras[0] || {}).id, day: null, picking: false, picked: new Set(), files: [], events: [], shown: 60 };
   const grid = h("div");
   const camSel = select(d.cameras.map((c) => [c.id, c.name]), view.cam,
     { onchange: (e) => { view.cam = e.target.value; view.day = null; fillDays(); load(); } });
@@ -638,18 +709,22 @@ async function pageRecordings(rerender) {
     dayBtn.classList.toggle("hidden", view.picking || !view.files.length);
     if (!view.files.length) {
       return clear(grid, h("div", { class: "center muted", style: "padding:28px 0" },
-        on ? "No recordings yet." : "Recording is switched off. Switch it on below."));
+        !on ? "Recording is switched off. Switch it on below."
+          : set.mode === "motion" ? "No recordings yet. A clip appears here as soon as something has moved."
+            : "No recordings yet."));
     }
     const newest = [...view.files].reverse();   // newest first
     const tiles = newest.slice(0, view.shown).map((f, i) => {
       const picked = view.picked.has(f.name);
       return h("button", { type: "button", class: "clip" + (picked ? " picked" : ""), onclick: () => {
         if (view.picking) { picked ? view.picked.delete(f.name) : view.picked.add(f.name); return draw(); }
-        playClip(cam(), newest, i, rerender);
+        playClip(cam(), newest, i, rerender, view.events);
       } },
       h("img", { loading: "lazy", alt: "", src: `/recordings/${view.cam}/${f.name.replace(".mp4", ".jpg")}`,
         onerror: (e) => e.target.remove() }),
       view.picking ? h("input", { type: "checkbox", class: "pick", checked: picked, tabIndex: -1 }) : null,
+      eventsOf(f, newest[i - 1], view.events).length ? h("span", { class: "badge live motion-badge" },
+        `${eventsOf(f, newest[i - 1], view.events).length}× movement`) : null,
       h("span", { class: "meta" }, h("span", {}, clipTime(f)), h("span", {}, formatBytes(f.size))));
     });
     clear(grid, h("div", { class: "gallery" }, tiles),
@@ -662,7 +737,9 @@ async function pageRecordings(rerender) {
     if (view.cam && view.day) {
       clear(grid, h("div", { class: "center", style: "padding:28px 0" }, h("div", { class: "spinner big" })));
       try {
-        view.files = (await api(`recordings?cam=${view.cam}&day=${view.day}`)).files;
+        const res = await api(`recordings?cam=${view.cam}&day=${view.day}`);
+        view.files = res.files;
+        view.events = res.events || [];
       } catch (e) { return clear(grid, banner("error", e.message)); }
     }
     draw();
@@ -820,7 +897,7 @@ function backupCard(rerender) {
     h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Backup and reset"),
       h("div", { class: "sub" }, "Move the settings to another device or start over"))),
     h("p", { class: "muted small" }, "The backup file contains all settings including your password and Wi-Fi passwords – keep it private. ",
-      "Restored on a replacement device, Home Assistant keeps recognising the cameras."),
+      "Restored on a replacement device, connected apps such as Home Assistant keep recognising the cameras."),
     file,
     h("div", { class: "actions" },
       h("a", { class: "btn secondary", href: "/api/system/backup" }, icon("download"), "Download backup"), restore, reset));
@@ -835,7 +912,7 @@ async function pageSystem(rerender) {
   const savePw = h("button", { class: "btn", onclick: () => busy(savePw, async () => {
     if (pw1.input.value !== pw2.input.value) throw new Error("The two new passwords are not the same.");
     await api("system/password", { current: cur.input.value, password: pw1.input.value });
-    toast("Password changed. Update it in Home Assistant as well (Reconfigure).");
+    toast("Password changed. Enter the new one in connected apps too (Home Assistant: Reconfigure).");
     rerender();
   }) }, "Change password");
 
@@ -859,7 +936,7 @@ async function pageSystem(rerender) {
     pageHead("System", "Password, time and maintenance."),
     h("div", { class: "card" },
       h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Password"),
-        h("div", { class: "sub" }, `One password for this page and Home Assistant · username “${s.user}”`))),
+        h("div", { class: "sub" }, `One password for this page and connected apps · username “${s.user}”`))),
       field("Current password", cur),
       h("div", { class: "fields two" }, field("New password", pw1, s.password_hint), field("Repeat new password", pw2)),
       h("div", { class: "actions" }, savePw)),

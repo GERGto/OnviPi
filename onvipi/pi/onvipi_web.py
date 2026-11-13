@@ -36,7 +36,8 @@ import onvipi_net as netlib
 import onvipi_record as record
 import onvipi_system as system
 import onvipi_update as update
-from onvipilib import CONF, MQTT_CONF, STREAM_NAME, load_conf, primary_ip, save_conf
+from onvipilib import (CONF, MQTT_CONF, STREAM_NAME, load_conf, load_json, primary_ip,
+                       save_conf)
 
 log = logging.getLogger("onvipi-web")
 
@@ -54,6 +55,7 @@ MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=ut
 # Livebild: nur diese Pfade von go2rtc (127.0.0.1:1984) werden unter /live/ durchgereicht –
 # der Player und das Abrufen von Streams, nichts, was go2rtc verändert.
 GO2RTC_PORT = 1984
+RUN_DIR = os.environ.get("ONVIPI_RUN_DIR", "/run/onvipi")   # Zustand von onvipi_onvif
 LIVE_RE = re.compile(r"/(stream\.html|video-rtc\.js|video-stream\.js|api/ws|api/webrtc|"
                      r"api/stream\.mp4|api/stream\.m3u8|api/hls/[\w.-]+|api/frame\.jpeg)")
 # Unter diesen Namen darf die Oberfläche angesprochen werden. Alles andere wird abgelehnt:
@@ -74,6 +76,14 @@ class ApiError(Exception):
 
 def clean_name(text):
     return re.sub(r"[\x00-\x1f'\"\\`$<>&]", "", str(text or ""))[:48].strip()
+
+
+def motion_state(cam_id):
+    """Zustand der Bewegungserkennung, wie ihn onvipi_onvif ablegt (None, wenn er veraltet ist)."""
+    data = load_json(os.path.join(RUN_DIR, f"state-{cam_id}.json"))
+    if not isinstance(data, dict) or time.time() - data.get("updated", 0) > 15:
+        return None
+    return data
 
 
 def restart_services(*units):
@@ -198,11 +208,11 @@ class App:
             cam = camera.get_camera(cams, str(item.get("id") or ""))
             if cam is None:   # neu erkanntes Gerät
                 dev = next((d for d in devices if d["dev"] == item.get("device")), None)
-                if not dev or any(camera._same(c["device"], dev["dev"]) for c in cams):
+                if not dev or any(camera.same_device(c["device"], dev["dev"]) for c in cams):
                     raise ApiError("This camera is no longer connected – please reload.")
                 cam = camera.new_camera(cams, dev, conf)
                 cams.append(cam)
-            dev = next((d for d in devices if camera._same(cam["device"], d["dev"])), None)
+            dev = next((d for d in devices if camera.same_device(cam["device"], d["dev"])), None)
             if "name" in item:
                 cam["name"] = clean_name(item["name"]) or cam["name"]
             for key in ("enabled", "overlay", "motion", "audio", "substream"):
@@ -449,11 +459,11 @@ def make_handler(app):
             host = host.rsplit(":", 1)[0] if not host.endswith("]") else host
             if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", host) or host == "localhost":
                 return True
-            name = app.hostname().lower()
-            if host == name or (host.startswith(name + ".") and host.endswith(LOCAL_SUFFIXES)):
+            # Namen ohne Punkt und Namen in Heimnetz-Domains vergibt nur das eigene Netz (der
+            # Router kennt das Gerät oft unter einem anderen Namen als dem Hostnamen) – eine
+            # fremde Webseite kann solche Namen nicht auf das Gerät zeigen lassen.
+            if re.fullmatch(r"[a-z0-9-]{1,63}", host) or host.endswith(LOCAL_SUFFIXES):
                 return True
-            if host.endswith(".local") and "." not in host[:-6]:
-                return True   # mDNS-Name (auch der alte, direkt nach einer Umbenennung)
             extra = load_conf(CONF).get("TRUSTED_HOSTS", "").lower().replace(",", " ").split()
             return host in extra
 
@@ -607,8 +617,9 @@ def make_handler(app):
                 "name": conf.get("CAM_NAME", "OnviPi"), "hostname": app.hostname(),
                 "version": system.version(), "ip": primary_ip(), "stats": stats,
                 "warnings": warnings,
-                "cameras": [{k: c[k] for k in ("id", "name", "enabled", "present", "new",
-                                               "size", "fps")} for c in cams],
+                "cameras": [dict({k: c[k] for k in ("id", "name", "enabled", "present", "new",
+                                                    "size", "fps", "rotate", "motion")},
+                                 state=motion_state(c["id"])) for c in cams],
                 "interfaces": ifaces, "hotspot": app.ap,
                 "update": {"available": bool(upd.get("available")), "latest": upd.get("latest", ""),
                            "auto": update.auto_enabled(conf)},
@@ -619,6 +630,10 @@ def make_handler(app):
         def api_get_snapshot(self, query):
             img = app.snapshot(query.get("cam", [""])[0])
             return self.send(200, img, "image/jpeg") if img else self.send(503)
+
+        def api_get_motion(self, _):
+            """Aktueller Messwert der Bewegungserkennung je Kamera (zum Einstellen der Empfindlichkeit)."""
+            self.json({c["id"]: motion_state(c["id"]) for c in camera.load_cameras()})
 
         # -- Kameras
         def api_get_cameras(self, _):
@@ -700,7 +715,10 @@ def make_handler(app):
                 "user": conf.get("CAM_USER", "admin"), "ip": primary_ip(),
                 "hostname": app.hostname(),
                 "cameras": [{"id": c["id"], "name": c["name"], "port": c["port"],
-                             "onvif_name": re.sub(r"[^A-Za-z0-9_.-]+", "_", c["name"])}
+                             "substream": c["substream"],
+                             "onvif_name": re.sub(r"[^A-Za-z0-9_.-]+", "_", c["name"]),
+                             # hält gerade ein ONVIF-Client (z. B. Home Assistant) ein Ereignis-Abo?
+                             "subscribed": bool((motion_state(c["id"]) or {}).get("subs"))}
                             for c in cams],
                 "mqtt": {"host": mqtt.get("MQTT_HOST", ""), "port": mqtt.get("MQTT_PORT", "1883"),
                          "user": mqtt.get("MQTT_USER", ""),
@@ -815,10 +833,16 @@ def make_handler(app):
             if cam_id:
                 if not re.fullmatch(r"[a-z0-9]+", cam_id) or not re.fullmatch(r"\d{8}", day):
                     raise ApiError("Invalid request.")
-                files = record.list_files(cam_id) if ready else []
-                return self.json({"files": [
-                    {"name": name, "start": int(start), "size": size}
-                    for start, name, size in files if name.startswith(day)]})
+                files = [f for f in (record.list_files(cam_id) if ready else [])
+                         if f[1].startswith(day)]
+                first = files[0][0] if files else 0
+                events = record.stored_events(cam_id, first - 60) if files else []
+                last = files[-1][0] + 400 if files else 0
+                return self.json({
+                    "files": [{"name": name, "start": int(start), "size": size}
+                              for start, name, size in files],
+                    # Bewegungsereignisse dieses Tages: [start, ende] – zeigen, warum es Clips gibt
+                    "events": [[int(e[0]), int(e[1])] for e in events if e[0] <= last][-2000:]})
             cams = []
             for cam in camera.load_cameras():
                 counts = {}

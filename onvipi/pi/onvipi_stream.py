@@ -20,12 +20,32 @@ from onvipi_camera import (FONT, get_camera, load_cameras, microphone_of, output
 TRANSPOSE = {90: ["transpose=1"], 180: ["transpose=1", "transpose=1"], 270: ["transpose=2"]}
 
 
+def mask_pixels(zone, width, height):
+    """Pixelgenaue Ecken (x0, y0, x1, y1) einer Privatzone.
+
+    Nach außen auf gerade Pixel gerundet (die Farbe ist im Video nur halb so fein aufgelöst –
+    sonst bleibt ein farbiger Saum), und was fast bis zum Rand reicht, reicht bis zum Rand.
+    """
+    def span(start, size, total):
+        a = int(start * total) // 2 * 2
+        b = min(total, -(-int(round((start + size) * total)) // 2) * 2)
+        if a <= total * 0.01:
+            a = 0
+        if b >= total * 0.99:
+            b = total
+        return a, max(b, a + 2)
+    x0, x1 = span(zone["x"], zone["w"], width)
+    y0, y1 = span(zone["y"], zone["h"], height)
+    return x0, y0, x1, y1
+
+
 def video_filters(cam):
     """Filterkette: drehen -> Privatzonen schwärzen -> Datum/Uhrzeit."""
     filters = list(TRANSPOSE.get(rotation(cam), []))
+    width, height = (int(v) for v in output_size(cam))
     for z in cam.get("privacy", []):
-        filters.append(f"drawbox=x=iw*{z['x']}:y=ih*{z['y']}:w=iw*{z['w']}:h=ih*{z['h']}"
-                       ":color=black:t=fill")
+        x0, y0, x1, y1 = mask_pixels(z, width, height)
+        filters.append(f"drawbox=x={x0}:y={y0}:w={x1 - x0}:h={y1 - y0}:color=black:t=fill")
     if cam.get("overlay"):
         w, h = output_size(cam)
         size = max(12, min(int(w), int(h)) // 28)

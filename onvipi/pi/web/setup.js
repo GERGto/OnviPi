@@ -43,18 +43,24 @@ function nav(back, next) {
   return null;
 }
 
+/* Every step looks the same: title and one sentence on top, the content in cards below. */
+function head(title, text) {
+  return h("div", { class: "page-head" }, h("h1", {}, title), text ? h("p", {}, text) : null);
+}
+
 /* ------------------------------------------------------------------ 1 · Welcome */
 function stepWelcome() {
   const item = (text) => h("li", {}, icon("check"), h("span", {}, text));
-  show(0, h("div", { class: "card" },
-    h("div", { class: "hero" }, icon("camera")),
-    h("h1", { class: "center" }, "Let’s set up your camera"),
-    h("p", { class: "center muted" }, "It takes about three minutes. You will:"),
-    h("ul", { class: "checklist" },
-      item("Name your camera and check the picture"),
-      item("Choose a password"),
-      item("Connect the camera to your home network"))),
-  nav(null, h("button", { class: "btn", onclick: stepCameras }, "Get started")));
+  show(0,
+    head("Let’s set up your camera", "It takes about three minutes."),
+    h("div", { class: "card" },
+      h("h2", {}, "What you will do"),
+      h("ul", { class: "checklist", style: "margin:10px 0 0" },
+        item("Name your camera and check the picture"),
+        item("Choose a password"),
+        item("Connect the camera to your home network"),
+        item("Decide how the camera gets updates"))),
+    nav(null, h("button", { class: "btn", onclick: stepCameras }, "Get started")));
 }
 
 /* ------------------------------------------------------------------ 2 · Camera */
@@ -72,15 +78,13 @@ async function stepCameras() {
   } catch (e) { return failed(e); }
   const cams = S.cameras.filter((c) => c.present || !c.new);
   if (!cams.length) {
-    return show(1, h("div", { class: "card" },
-      h("div", { class: "hero" }, icon("camera")),
-      h("h1", { class: "center" }, "No camera found"),
-      h("p", { class: "center muted" },
-        "Plug a USB webcam into the Raspberry Pi, wait a few seconds and search again."),
-      h("p", { class: "center small", style: "margin-top:14px" },
+    return show(1,
+      head("No camera found", "Plug a USB webcam into the Raspberry Pi, wait a few seconds and search again."),
+      h("div", { class: "card" },
+        h("p", { class: "muted" }, "The camera must be a USB webcam. If it is plugged in, try another USB port."),
         h("a", { href: "#", onclick: (e) => { e.preventDefault(); stepPassword(); } },
-          "Continue without a camera – I will add one later"))),
-    nav(stepWelcome, h("button", { class: "btn", onclick: stepCameras }, icon("refresh"), "Search again")));
+          "Continue without a camera – I will add one later")),
+      nav(stepWelcome, h("button", { class: "btn", onclick: stepCameras }, icon("refresh"), "Search again")));
   }
   S.cameras = cams;
   const single = cams.length === 1;
@@ -100,10 +104,9 @@ async function stepCameras() {
     stepPassword();
   }) }, "Next");
   show(1,
-    h("div", { class: "page-head" },
-      h("h1", {}, single ? "Is this the right picture?" : `${cams.length} cameras found`),
-      h("p", {}, single ? "Give the camera a name. You can change everything later."
-        : "Name each camera and switch off the ones you do not want to use.")),
+    head(single ? "Is this the right picture?" : `${cams.length} cameras found`,
+      single ? "Give the camera a name. You can change everything later."
+        : "Name each camera and switch off the ones you do not want to use."),
     editors.map((e) => e.el),
     nav(stepWelcome, next));
 }
@@ -133,11 +136,8 @@ function stepPassword() {
     stepNetwork();
   } }, "Next");
   show(2,
+    head("Choose a password", "One password for everything: this settings page and the apps you connect the camera to."),
     h("div", { class: "card" },
-      h("div", { class: "hero" }, icon("lock")),
-      h("h1", { class: "center" }, "Choose a password"),
-      h("p", { class: "center muted" },
-        "One password for everything: this settings page and Home Assistant."),
       error,
       kept ? banner("ok", "The password you entered before is kept. Leave the fields empty to keep it.") : null,
       field("Password", pw1, S.password_hint),
@@ -241,10 +241,8 @@ function stepNetwork(errorText) {
 
   renderList();
   show(3,
-    h("div", { class: "page-head" },
-      h("h1", {}, "Connect to your network"),
-      h("p", {}, net.ethernet ? "The camera is already connected by cable."
-        : "Choose the Wi-Fi the camera should use.")),
+    head("Connect to your network", net.ethernet ? "The camera is already connected by cable."
+      : "Choose the Wi-Fi the camera should use."),
     error,
     net.ethernet ? banner("ok", h("b", {}, "Connected by network cable"),
       net.ip ? ` · address ${net.ip}` : "", h("br"),
@@ -283,10 +281,8 @@ function stepUpdates() {
   };
   sync();
   show(4,
+    head("Keep the camera up to date", "Updates fix security problems and bring improvements. We recommend leaving both switched on."),
     h("div", { class: "card" },
-      h("div", { class: "hero" }, icon("shield")),
-      h("h1", { class: "center" }, "Keep the camera up to date"),
-      h("p", { class: "center muted" }, "Updates fix security problems and bring improvements. We recommend leaving both switched on."),
       h("div", { class: "field" }, check,
         h("div", { class: "hint" }, "Once a night the camera asks GitHub whether there is a new version. ",
           "Nothing else is sent – this is the only time the camera connects to the internet.")),
@@ -306,8 +302,8 @@ function detailsText() {
     `Username:      ${A.user}`,
     `Password:      ${A.password || "(the password you chose)"}`,
     "",
-    "Home Assistant: Settings > Devices & services > Add integration > ONVIF,",
-    "select the camera and enter this username and password.",
+    "The same username and password are used for Home Assistant (ONVIF)",
+    "and other camera apps.",
     "",
   ].join("\r\n");
 }
@@ -335,10 +331,8 @@ function stepSave() {
     href: "data:text/plain;charset=utf-8," + encodeURIComponent(detailsText()) },
   icon("download"), "Save as file");
   show(5,
-    h("div", { class: "page-head" },
-      h("h1", {}, "Save your access details"),
-      h("p", {}, "You need them to open the settings page and to add the camera to Home Assistant. ",
-        "Take your time – nothing happens until you tap the button below.")),
+    head("Save your access details", "You need them to open the settings page and to connect the camera to other apps. "
+      + "Take your time – nothing happens until you tap the button below."),
     h("div", { class: "card" },
       h("dl", { class: "kv" },
         h("dt", {}, "Settings page"), h("dd", { class: "secret" }, `http://${S.hostname}.local`),
@@ -354,7 +348,7 @@ function stepSave() {
         drops ? h("li", {}, "This setup Wi-Fi (", h("b", {}, S.network.ap_ssid),
           ") switches off and your phone returns to your normal Wi-Fi.") : null,
         h("li", {}, "Open ", h("b", {}, `http://${S.hostname}.local`), " and log in with your password."),
-        h("li", {}, "The settings page shows how to add the camera to Home Assistant.")),
+        h("li", {}, "There you watch live, see recordings – and find out how to add the camera to Home Assistant or other apps.")),
       drops ? h("p", { class: "muted small" }, "If ", h("b", {}, S.network.ap_ssid),
         " shows up again after a minute, the Wi-Fi password was wrong. Connect to it again and correct it.") : null),
     h("div", { class: "card" },
@@ -405,7 +399,7 @@ function showDone(progress) {
       sameNetwork ? null : banner("info", "The setup Wi-Fi switches off in about a minute. ",
         "Connect your phone to your normal Wi-Fi again, then open the settings page."),
       h("p", { class: "center muted small", style: "margin-top:12px" },
-        "Log in with your password. The page “Home Assistant” shows the next steps.")),
+        "Log in with your password. The page “Connect” shows how to add the camera to Home Assistant or other apps.")),
     nav(null, h("a", { class: "btn", href: url }, "Open the settings page")));
 }
 

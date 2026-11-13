@@ -14,9 +14,14 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import unicodedata
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from onvipilib import (CAMERAS, CONF, GO2RTC_YAML, MQTT_CONF, load_conf, load_json,  # noqa: E402
+                       save_conf)
 
 USERCONF = "/usr/lib/userconf-pi/userconf"   # offizielles Werkzeug von Raspberry Pi OS
 USER_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
@@ -374,7 +379,8 @@ class Terminal:
         minutes = max(5, min(240, int(minutes)))
         self.stop()
         cmd = ["ttyd", "-i", "lo", "-p", str(self.PORT), "-b", self.BASE]
-        if "--writable" in _run(["ttyd", "--help"], timeout=5).stdout:
+        usage = _run(["ttyd", "--help"], timeout=5)
+        if "--writable" in usage.stdout + usage.stderr:
             cmd.append("-W")   # ab ttyd 1.7.4 ist das Terminal sonst nur lesbar
         cmd += ["login"]
         with self.lock:
@@ -434,7 +440,6 @@ def _wifi_profiles():
 
 def backup():
     """Alle Einstellungen als ein JSON-Dokument. Enthält Passwörter (Konto, WLAN, MQTT)."""
-    from onvipilib import CAMERAS, CONF, MQTT_CONF, load_conf, load_json
     return {"format": BACKUP_FORMAT, "product": "OnviPi", "version": version(),
             "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "hostname": socket.gethostname(),
             "timezone": current_timezone(), "conf": load_conf(CONF),
@@ -444,8 +449,7 @@ def backup():
 
 def restore(data):
     """Spielt eine Sicherung ein. Gibt eine Fehlermeldung oder None zurück."""
-    from onvipilib import CONF, MQTT_CONF, load_conf, save_conf
-    import onvipi_camera as camera
+    import onvipi_camera as camera   # hier, weil onvipi_camera beim Start viel einliest
     if not isinstance(data, dict) or data.get("product") != "OnviPi" \
             or data.get("format") != BACKUP_FORMAT or not isinstance(data.get("conf"), dict):
         return "This file is not an OnviPi backup."
@@ -495,7 +499,6 @@ def factory_reset():
     gehört das Linux-Konto dem Nutzer und bleibt, ebenso das bisherige Passwort.
     Aufnahmen auf dem USB-Speicher bleiben erhalten.
     """
-    from onvipilib import CAMERAS, CONF, GO2RTC_YAML, MQTT_CONF, load_conf, save_conf
     old = load_conf(CONF)
     login = old.get("LOGIN_USER", "")
     _run(["systemctl", "stop", "onvipi-record.service"], timeout=60)

@@ -49,6 +49,9 @@
 /* App feeling: no rubber-band scrolling of the whole page, no grey tap flash, no accidental
    text selection on controls, instant taps. */
 html { -webkit-text-size-adjust: 100%; overscroll-behavior-y: none; -webkit-tap-highlight-color: transparent; }
+/* Nothing may stick out sideways (e.g. while a step slides in): phones would shrink the whole
+   page to fit, and the fixed bars would slip out of view. */
+html, body { overflow-x: hidden; overflow-x: clip; max-width: 100%; }
 button, .btn, .nav, .switch, .check, summary, .net, .clip, .brand, .topbar, .badge {
   -webkit-user-select: none; user-select: none; touch-action: manipulation; }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
@@ -250,7 +253,7 @@ details.more > .more-body { padding-top: 14px; }
 @keyframes pulse { 50% { opacity: .35; } }
 .cams { display: grid; gap: 16px; margin-bottom: 16px; }
 .cams > .card { margin-bottom: 0; }
-.cams:not(.multi) { max-width: 760px; }
+.cams.narrow { max-width: 760px; }
 @media (min-width: 720px) { .cams.multi { grid-template-columns: 1fr 1fr; } }
 
 /* ---------- zones on the picture ---------- */
@@ -259,8 +262,19 @@ details.more > .more-body { padding-top: 14px; }
 .zone-layer { position: absolute; inset: 0; cursor: crosshair; touch-action: none; }
 .zone { position: absolute; border: 2px solid #3ddc84; background: rgba(61, 220, 132, .25); border-radius: 3px; }
 .zone-box.privacy .zone { border-color: #fff; background: rgba(0, 0, 0, .82); }
+.zone { cursor: move; touch-action: none; }
 .zone.draft { border-style: dashed; pointer-events: none; }
-.zone-del { position: absolute; top: 2px; right: 2px; width: 26px; height: 26px; border: 0; border-radius: 50%;
+.zone-handle { position: absolute; width: 22px; height: 22px; }
+.zone-handle::after { content: ""; position: absolute; inset: 6px; background: #fff; border: 1px solid #0b0e13; border-radius: 2px; }
+.zone-handle.nw { left: -11px; top: -11px; cursor: nwse-resize; }
+.zone-handle.se { right: -11px; bottom: -11px; cursor: nwse-resize; }
+.zone-handle.ne { right: -11px; top: -11px; cursor: nesw-resize; }
+.zone-handle.sw { left: -11px; bottom: -11px; cursor: nesw-resize; }
+.motion-meter { position: relative; height: 10px; border-radius: 5px; background: var(--border); overflow: hidden; margin-bottom: 6px; }
+.motion-meter span { display: block; height: 100%; width: 0; background: var(--muted); border-radius: 5px; transition: width .25s; }
+.motion-meter span.on { background: var(--ok); }
+.motion-meter i { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--text); }
+.zone-del { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 26px; height: 26px; border: 0; border-radius: 50%;
   background: rgba(10, 14, 20, .8); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
 .zone-del svg.icon { width: 14px; height: 14px; }
 
@@ -274,8 +288,10 @@ details.more > .more-body { padding-top: 14px; }
 .clip .pick { position: absolute; top: 6px; left: 6px; width: 22px; height: 22px; accent-color: var(--accent); }
 .clip.picked { outline: 3px solid var(--accent); outline-offset: -3px; }
 .clip .live { position: absolute; top: 6px; right: 6px; }
+.clip .motion-badge { background: rgba(10, 14, 20, .72); color: #fff; border: 0; font-size: .72rem; padding: 1px 8px; }
 .toolbar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 14px; }
 .toolbar .field { margin: 0; flex: 1; min-width: 130px; }
+.toolbar .btn, .toolbar select { min-height: 44px; height: 44px; }   /* same height as the selects next to them */
 .player { max-width: 900px; padding: 14px; }
 .player video { width: 100%; max-height: 70vh; background: #000; border-radius: 8px; display: block; }
 
@@ -401,8 +417,6 @@ ol.steps li { margin: 5px 0; }
   .main { margin-left: var(--nav-width); }
   .content { padding: 32px 28px 48px; }
 }
-.mobile-foot { margin-top: 8px; }
-@media (min-width: 900px) { .mobile-foot { display: none; } }
 
 .login { max-width: 400px; margin: 0 auto; padding: 12vh 16px 40px; }
 .terminal-frame { width: 100%; height: min(70vh, 640px); border: 1px solid var(--border); border-radius: 10px; background: #000; display: block; }

@@ -291,7 +291,7 @@ def new_camera(cams, device, conf=None):
     })
 
 
-def _same(dev_a, dev_b):
+def same_device(dev_a, dev_b):
     return bool(dev_a and dev_b) and os.path.realpath(dev_a) == os.path.realpath(dev_b)
 
 
@@ -303,13 +303,13 @@ def reconcile(cams, devices):
     Mehrdeutige Fälle bleiben unverändert (die Oberfläche zeigt sie als "nicht verbunden").
     """
     changed = False
-    missing = [c for c in cams if not any(_same(c["device"], d["dev"]) for d in devices)]
-    free = [d for d in devices if not any(_same(c["device"], d["dev"]) for c in cams)]
+    missing = [c for c in cams if not any(same_device(c["device"], d["dev"]) for d in devices)]
+    free = [d for d in devices if not any(same_device(c["device"], d["dev"]) for c in cams)]
     if len(missing) == 1 and len(free) == 1 and devices:
         missing[0]["device"] = free[0]["dev"]
         changed = True
     for cam in cams:
-        dev = next((d for d in devices if _same(cam["device"], d["dev"])), None)
+        dev = next((d for d in devices if same_device(cam["device"], d["dev"])), None)
         if not dev or cam["size"] in dev["formats"].get(cam["format"], {}):
             continue
         fmt, size = choose(dev["formats"])
@@ -346,14 +346,14 @@ def overview(cams=None, devices=None):
     devices = list_devices() if devices is None else devices
     items = []
     for cam in cams:
-        dev = next((d for d in devices if _same(cam["device"], d["dev"])), None)
+        dev = next((d for d in devices if same_device(cam["device"], d["dev"])), None)
         items.append(dict(cam, present=bool(dev), new=False,
                           label=dev["label"] if dev else camera_label(cam["device"]),
                           formats=dev["formats"] if dev else {},
                           mic=bool(dev and dev.get("mic"))))
     known = list(cams)
     for dev in devices:
-        if any(_same(c["device"], dev["dev"]) for c in cams):
+        if any(same_device(c["device"], dev["dev"]) for c in cams):
             continue
         cam = new_camera(known, dev)
         known.append(cam)

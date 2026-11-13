@@ -57,7 +57,7 @@ DEVICES = [{"dev": f"/dev/v4l/by-id/usb-Demo_Webcam_{n}-video-index0",
             "formats": FORMATS, "mic": n % 2 == 0} for n in range(args.cameras)]
 camera.list_devices = lambda: DEVICES
 camera.camera_label = lambda dev: next((d["label"] for d in DEVICES if d["dev"] == dev), dev)
-camera._same = lambda a, b: bool(a and b) and a == b
+camera.same_device = lambda a, b: bool(a and b) and a == b
 if not args.setup or DEVICES:
     cams = []
     for dev in (DEVICES if args.setup else DEVICES[:1]):
@@ -145,6 +145,14 @@ if not args.setup:
             t = now - n * 1900 - (200 if cam_id == "cam2" else 0)
             with open(os.path.join(rec_dir, cam_id, time.strftime("%Y%m%d-%H%M%S.mp4", time.localtime(t))), "wb") as f:
                 f.write(b"\0" * (3_000_000 + n * 40_000))
+for cam_id in (() if args.setup else ("onvipi", "cam2")):   # movements that explain the clips
+    with open(os.path.join(rec_dir, cam_id, record.EVENTS), "w") as f:
+        for start, _, _ in record.list_files(cam_id)[::2]:
+            f.write(f"{start + 12:.1f} {start + 31:.1f} 14.2\n{start + 140:.1f} {start + 149:.1f} 9.8\n")
+web.motion_state = lambda cam_id: {
+    "subs": 1, "analysing": True, "motion": int(time.time()) % 20 < 6, "since": 0,
+    "last": [time.time() - 340, time.time() - 322], "threshold": 8.9,
+    "score": 12.5 if int(time.time()) % 20 < 6 else 1.2 + (int(time.time() * 2) % 5) * 0.4, "updated": time.time()}
 update.check = lambda: {"current": "dev", "latest": "2.2", "available": True,
                         "url": "https://github.com/GERGto/OnviPi/releases"}
 update.start = lambda: update.write_status("done", version="2.2")

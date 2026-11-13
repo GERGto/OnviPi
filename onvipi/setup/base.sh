@@ -11,6 +11,7 @@ set -euo pipefail
 
 PKG="$(cd "$(dirname "$0")/.." && pwd)"          # package root (onvipi/)
 GO2RTC_VERSION="${GO2RTC_VERSION:-1.9.9}"
+TTYD_VERSION=1.7.7                                # checksums below belong to this version
 
 say()  { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -31,15 +32,33 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
 # NTFS-formatted USB storage for recordings (older kernels without the ntfs3 driver). Optional.
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ntfs-3g \
   || echo "Note: package 'ntfs-3g' is not available."
-# Terminal in the web interface (expert mode). Optional: without it the page says so.
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ttyd \
-  || echo "Note: package 'ttyd' is not available – the browser terminal stays disabled."
 
 say "Downloading go2rtc v$GO2RTC_VERSION ($GOARCH)"
 curl -fSL --retry 3 -o /usr/local/bin/go2rtc.new \
   "https://github.com/AlexxIT/go2rtc/releases/download/v${GO2RTC_VERSION}/go2rtc_linux_${GOARCH}"
 chmod 755 /usr/local/bin/go2rtc.new
 mv /usr/local/bin/go2rtc.new /usr/local/bin/go2rtc
+
+# Terminal in the web interface (expert mode). Raspberry Pi OS has no ttyd package, so the
+# official static binary is used – pinned by version and checksum. Optional: without it the
+# terminal page says so.
+if [ "$GOARCH" = arm64 ]; then
+  TTYD_FILE=ttyd.aarch64; TTYD_SHA=b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165
+else
+  TTYD_FILE=ttyd.armhf;   TTYD_SHA=8240c8438b68d3b10b0e1a4e7c914d70fca6a7606b516f40bf40adfa1044d801
+fi
+if ! echo "$TTYD_SHA  /usr/local/bin/ttyd" | sha256sum -c - >/dev/null 2>&1; then
+  say "Downloading ttyd $TTYD_VERSION"
+  if curl -fSL --retry 3 -o /usr/local/bin/ttyd.new \
+       "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/${TTYD_FILE}" \
+     && echo "$TTYD_SHA  /usr/local/bin/ttyd.new" | sha256sum -c - >/dev/null; then
+    chmod 755 /usr/local/bin/ttyd.new
+    mv /usr/local/bin/ttyd.new /usr/local/bin/ttyd
+  else
+    rm -f /usr/local/bin/ttyd.new
+    echo "Note: ttyd could not be installed – the browser terminal stays disabled."
+  fi
+fi
 
 say "Installing OnviPi files"
 id onvipi >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin onvipi

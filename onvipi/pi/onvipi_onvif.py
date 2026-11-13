@@ -27,6 +27,7 @@ import calendar
 import hashlib
 import hmac
 import http.server
+import json
 import logging
 import os
 import re
@@ -82,8 +83,9 @@ def zone_mask(zones, w, h):
 
 
 def recording_wants_motion(conf):
-    """Aufzeichnung "bei Bewegung" braucht die Analyse auch ohne Home-Assistant-Abo."""
-    return conf.get("REC_MODE") == "motion" and bool(conf.get("REC_UUID"))
+    """Die Aufzeichnung braucht die Analyse auch ohne Home-Assistant-Abo: "motion" entscheidet
+    damit, was bleibt; "continuous" vermerkt die Ereignisse an den Aufnahmen."""
+    return conf.get("REC_MODE") in ("motion", "continuous") and bool(conf.get("REC_UUID"))
 
 
 def read_exact(f, n):
@@ -108,9 +110,51 @@ class Motion:
         self.seq = 0                        # erhöht sich bei jedem Zustandswechsel
         self.cond = threading.Condition()
         self.proc = None
+        # Für Aufzeichnung und Oberfläche (beides andere Prozesse), alles in RUN_DIR:
+        #   motion-<id>        Marker, wird aktualisiert, solange Bewegung anliegt
+        #   motion-<id>.log    abgeschlossene Ereignisse, je Zeile "start ende spitzenwert"
+        #   state-<id>.json    aktueller Zustand (Messwert, Schwelle, HA verbunden, …)
         self.marker = os.path.join(RUN_DIR, f"motion-{cam_id}")
+        self.events = self.marker + ".log"
+        self.state_file = os.path.join(RUN_DIR, f"state-{cam_id}.json")
         self.marked = 0
+        self.started = 0          # Beginn des laufenden Ereignisses
+        self.peak = 0.0           # höchster Messwert des laufenden Ereignisses
+        self.last_event = None    # (start, ende) des letzten abgeschlossenen Ereignisses
+        self.reported = 0
         threading.Thread(target=self._loop, daemon=True).start()
+
+    def report(self, analysing, score=0.0, threshold=0.0, force=False):
+        """Zustand für die Oberfläche ablegen (höchstens einmal pro Sekunde)."""
+        now = time.time()
+        if not force and now - self.reported < 1:
+            return
+        self.reported = now
+        data = {"subs": self.sub_count(), "analysing": analysing, "motion": self.state,
+                "since": self.started if self.state else 0, "last": self.last_event,
+                "score": round(score, 2), "threshold": round(threshold, 2), "updated": now}
+        try:
+            tmp = self.state_file + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f)
+            os.replace(tmp, self.state_file)
+        except OSError:
+            pass
+
+    def log_event(self, start, end):
+        """Abgeschlossenes Ereignis anhängen; die Datei bleibt klein (letzte ~500 Ereignisse)."""
+        self.last_event = (round(start, 1), round(end, 1))
+        try:
+            with open(self.events, "a") as f:
+                f.write(f"{start:.1f} {end:.1f} {self.peak:.1f}\n")
+            if os.path.getsize(self.events) > 40000:
+                with open(self.events) as f:
+                    lines = f.readlines()[-500:]
+                with open(self.events + ".tmp", "w") as f:
+                    f.writelines(lines)
+                os.replace(self.events + ".tmp", self.events)
+        except OSError:
+            pass
 
     def mark(self):
         """Solange Bewegung anliegt, die Marker-Datei aktuell halten (liest onvipi_record)."""
@@ -126,10 +170,16 @@ class Motion:
     def set_state(self, val):
         with self.cond:
             if val != self.state:
+                now = time.time()
+                if val:
+                    self.started, self.peak = now, 0.0
+                else:
+                    self.log_event(self.started, now)
                 self.state = val
                 self.seq += 1
                 self.cond.notify_all()
-                log.info("[%s] Motion %s", self.cam_id, "detected" if val else "ended")
+                log.info("[%s] Motion %s", self.cam_id, "detected" if val else
+                         f"ended after {now - self.started:.0f} s (peak {self.peak:.1f})")
 
     def wait_change(self, last_seq, timeout):
         with self.cond:
@@ -156,6 +206,7 @@ class Motion:
             wanted = self.sub_count() > 0 or recording_wants_motion(conf)
             if not cam or not cam["motion"] or not wanted:
                 self.set_state(False)
+                self.report(False, force=True)
                 time.sleep(2)
                 continue
             try:
@@ -183,6 +234,7 @@ class Motion:
                  self.cam_id, thr, fps)
         mask = zone_mask(cam["motion_zones"], w, h)   # nur diese Pixel zählen
         prev, consec, last_over, warm = None, 0, 0.0, 6  # erste Frames (Startruckler) verwerfen
+        recent = 0.0
         checked = time.time()
         try:
             while True:
@@ -206,6 +258,10 @@ class Motion:
                         self.set_state(True)
                     elif self.state and now - last_over > cooldown:
                         self.set_state(False)
+                    if self.state:
+                        self.peak = max(self.peak, score)
+                    recent = max(recent * 0.6, score)   # kurz nachleuchten, damit man es sieht
+                    self.report(True, recent, thr)
                 if self.state:
                     self.mark()
                 prev = buf
@@ -294,9 +350,9 @@ class Onvif:
             "<tds:GetDeviceInformationResponse>"
             "<tds:Manufacturer>Raspberry Pi</tds:Manufacturer>"
             "<tds:Model>OnviPi</tds:Model>"
-            "<tds:FirmwareVersion>1.0</tds:FirmwareVersion>"
+            f"<tds:FirmwareVersion>{VERSION}</tds:FirmwareVersion>"
             f"<tds:SerialNumber>{self.uuid}</tds:SerialNumber>"
-            "<tds:HardwareId>OnviPi-Pi4</tds:HardwareId>"
+            "<tds:HardwareId>OnviPi</tds:HardwareId>"
             "</tds:GetDeviceInformationResponse>"
         )
 
@@ -570,6 +626,15 @@ def privileged(*args):
         log.warning("onvipi_priv %s failed: %s", args[0], ex)
 
 
+def _version():
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")) as f:
+            return f.read().strip() or "dev"
+    except OSError:
+        return "dev"
+
+
+VERSION = _version()
 MAX_BODY = 256 * 1024     # größere Anfragen sind kein ONVIF
 HTTP_REALM = "OnviPi"
 NONCE_KEY = os.urandom(16)

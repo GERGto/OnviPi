@@ -39,6 +39,7 @@ jobs:
         run: |
           for f in onvipi/install.sh onvipi/setup/*.sh image/build-image.sh tools/*.sh; do bash -n "$f"; done
           python3 -m py_compile onvipi/pi/*.py
+          python3 -m unittest discover -s tests
       - name: Build package
         run: bash tools/package.sh "${{ steps.ver.outputs.version }}" dist
       - uses: actions/upload-artifact@v4

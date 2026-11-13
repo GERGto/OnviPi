@@ -3,6 +3,38 @@
 All notable changes to OnviPi. Downloads are available under
 [Releases](https://github.com/GERGto/OnviPi/releases).
 
+## [2.4] – 2026-11-13
+
+First release with feedback from real devices (Pi 4 and Pi 5).
+
+### Fixed
+- **“Recordings without movement”:** with *When something moves* the gallery also showed the
+  minute that was just being written. Clips are now collected in a hidden folder first and
+  only appear in the gallery if the camera really saw movement.
+- **Setup wizard:** the button on the first page was cut off at the bottom on phones.
+- **Terminal:** ttyd was missing on Raspberry Pi OS (no package). The official binary is now
+  installed, pinned by version and checksum.
+- **Privacy masks** reach the edge of the picture exactly (no thin strip left over).
+- Router names such as `http://picam.fritz.box` are accepted again by the web interface.
+- Overview: a single camera is as wide as the tiles below; portrait cameras are shown upright
+  without black bars. Recordings: selector and buttons have the same height.
+
+### Added
+- **Use without Home Assistant:** the page *Connect* (formerly *Home Assistant*) explains the
+  three ways – on its own, Home Assistant, other ONVIF/RTSP apps – with addresses to copy
+  and a “Connected” indicator for Home Assistant. Wording in wizard and interface no longer
+  assumes Home Assistant.
+- **Why a clip exists:** every clip shows its movements with time and duration; the overview
+  shows the last movement per camera. Movements are logged next to the recordings.
+- **Live motion bar** under the sensitivity slider: the movement right now and the trigger level.
+- **Motion areas and privacy masks can be moved and resized** (drag, corner handles).
+- Tests for camera list, streams, masks, recording and updates run in the release pipeline.
+
+### Changed
+- All wizard pages share one layout: title on top, content in cards.
+- Motion detection also runs while recording all the time, so those clips show movements too.
+- ONVIF reports the real firmware version.
+
 ## [2.3] – 2026-11-12
 
 ### Security
