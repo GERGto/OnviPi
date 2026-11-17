@@ -3,6 +3,14 @@
 All notable changes to OnviPi. Downloads are available under
 [Releases](https://github.com/GERGto/OnviPi/releases).
 
+## [2.6.1] – 2026-11-17
+
+### Changed
+- *Network* searches for Wi-Fi networks right away when the page opens and again after
+  choosing another Wi-Fi adapter, so the list and signal strengths are current.
+- More space between the *Apply* button of the adapter switch and the list of networks,
+  which now has the heading “Available networks”.
+
 ## [2.6] – 2026-11-17
 
 ### Fixed

@@ -348,21 +348,37 @@ function wifiConnectCard(n, rerender) {
     clear(list, rows);
     sync();
   };
-  const scan = h("button", { class: "btn secondary small", onclick: () => busy(scan, async () => {
-    const res = await api("network/scan", { iface: sel.iface });
-    networks = res.networks;
-    if (!res.fresh) toast("The Wi-Fi adapter is busy with the setup hotspot – showing the last list.");
-    renderList();
-  }) }, icon("refresh"), "Search networks");
+  // Suche beim Öffnen und nach einem Adapterwechsel automatisch; wechselt der Adapter während
+  // einer Suche, wird danach mit dem neuen gesucht (das alte Ergebnis wird verworfen).
+  let scanning = false, again = false;
+  const runScan = async (quiet) => {
+    if (scanning) { again = true; return; }
+    scanning = true;
+    await busy(scan, async () => {
+      do {
+        again = false;
+        const iface = sel.iface;
+        const res = await api("network/scan", { iface });
+        if (iface !== sel.iface) continue;
+        networks = res.networks;
+        if (!res.fresh && !quiet) toast("The Wi-Fi adapter is busy with the setup hotspot – showing the last list.");
+        renderList();
+      } while (again);
+    });
+    scanning = false;
+  };
+  const scan = h("button", { class: "btn secondary small", onclick: () => runScan(false) }, icon("refresh"), "Search networks");
   const adapter = n.wifi_devices.length > 1 ? field("Wi-Fi adapter",
-    select(n.wifi_devices.map((d) => [d.iface, d.label]), sel.iface, { onchange: (e) => { sel.iface = e.target.value; syncMove(); } }),
+    select(n.wifi_devices.map((d) => [d.iface, d.label]), sel.iface,
+      { onchange: (e) => { sel.iface = e.target.value; syncMove(); runScan(true); } }),
     "Choose which adapter connects to your home network. A USB adapter with an external antenna usually reaches further.") : null;
   renderList();
   syncMove();
+  runScan(true);
   return h("div", { class: "card" },
     h("div", { class: "card-head" }, h("div", { style: "flex:1" }, h("h2", {}, "Connect to Wi-Fi"),
       h("div", { class: "sub" }, "Change the network or add another one.")), scan),
-    adapter, moveBox, list, h("div", { style: "height:14px" }), manualBox, pskBox, actions);
+    adapter, moveBox, h("div", { class: "label", style: "margin:22px 0 8px" }, "Available networks"), list, h("div", { style: "height:14px" }), manualBox, pskBox, actions);
 }
 
 function ipCard(iface, n, rerender) {
