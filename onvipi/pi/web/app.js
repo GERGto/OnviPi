@@ -280,8 +280,38 @@ async function pageCameras(rerender) {
 }
 
 /* ------------------------------------------------------------------ network */
+async function waitForWifi(ssid, rerender) {
+  for (let i = 0; i < 60; i++) {
+    await sleep(2000);
+    let st;
+    try { st = await api("network/wifi-status"); } catch (e) { continue; }
+    if (st.phase === "done") { toast(`Connected to “${ssid}”.`); return rerender(); }
+    if (st.phase === "failed") throw new Error(st.error);
+  }
+  throw new Error("No answer from the camera. Check that you are on the same network.");
+}
+
 function wifiConnectCard(n, rerender) {
   const sel = { ssid: "", hidden: false, secure: true, iface: n.wifi_iface };
+  const home = n.home_wifi;
+  const homeName = home ? home.connection.replace(/^wifi-/, "") : "";
+  const ifaceLabel = (iface) => (n.wifi_devices.find((d) => d.iface === iface) || { label: iface }).label;
+  const move = h("button", { class: "btn", onclick: async () => {
+    if (!await confirmDialog({ title: `Use ${ifaceLabel(sel.iface)}?`, confirm: "Apply",
+      text: `The camera reconnects to “${homeName}” with the saved password. Its IP address may change, `
+        + "so this page can become unreachable; afterwards open it again at http://" + n.hostname + ".local. "
+        + "If the connection fails, the camera goes back to the previous adapter." })) return;
+    busy(move, async () => {
+      await api("network/wifi-move", { iface: sel.iface });
+      await waitForWifi(homeName, rerender);
+    });
+  } }, "Apply");
+  const moveBox = h("div", { class: "hidden" },
+    banner("info", "Currently connected to ", h("b", {}, "“" + homeName + "”"), " via ",
+      h("b", {}, home ? ifaceLabel(home.iface) : ""), ". Apply to connect to the same network with the selected adapter "
+      + "– the saved password is used. To choose another network, select it below instead."),
+    h("div", { class: "actions" }, move));
+  const syncMove = () => moveBox.classList.toggle("hidden", !home || sel.iface === home.iface);
   let networks = n.networks;
   const list = h("div", { class: "nets" });
   const manual = h("input", { type: "text", maxLength: 32, autocapitalize: "off", spellcheck: false });
@@ -298,14 +328,7 @@ function wifiConnectCard(n, rerender) {
         + "the camera goes back to the previous network." })) return;
     busy(connect, async () => {
       await api("network/wifi", { ssid, psk: key, hidden: sel.hidden, iface: sel.iface });
-      for (let i = 0; i < 60; i++) {
-        await sleep(2000);
-        let st;
-        try { st = await api("network/wifi-status"); } catch (e) { continue; }
-        if (st.phase === "done") { toast(`Connected to “${ssid}”.`); return rerender(); }
-        if (st.phase === "failed") throw new Error(st.error);
-      }
-      throw new Error("No answer from the camera. Check that you are on the same network.");
+      await waitForWifi(ssid, rerender);
     });
   } }, "Connect");
   const actions = h("div", { class: "actions" }, connect);
@@ -332,13 +355,14 @@ function wifiConnectCard(n, rerender) {
     renderList();
   }) }, icon("refresh"), "Search networks");
   const adapter = n.wifi_devices.length > 1 ? field("Wi-Fi adapter",
-    select(n.wifi_devices.map((d) => [d.iface, d.label]), sel.iface, { onchange: (e) => { sel.iface = e.target.value; } }),
+    select(n.wifi_devices.map((d) => [d.iface, d.label]), sel.iface, { onchange: (e) => { sel.iface = e.target.value; syncMove(); } }),
     "Choose which adapter connects to your home network. A USB adapter with an external antenna usually reaches further.") : null;
   renderList();
+  syncMove();
   return h("div", { class: "card" },
     h("div", { class: "card-head" }, h("div", { style: "flex:1" }, h("h2", {}, "Connect to Wi-Fi"),
       h("div", { class: "sub" }, "Change the network or add another one.")), scan),
-    adapter, list, h("div", { style: "height:14px" }), manualBox, pskBox, actions);
+    adapter, moveBox, list, h("div", { style: "height:14px" }), manualBox, pskBox, actions);
 }
 
 function ipCard(iface, n, rerender) {

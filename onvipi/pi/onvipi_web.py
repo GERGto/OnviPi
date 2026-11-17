@@ -103,7 +103,7 @@ class App:
         self.terminal = system.Terminal()
         self.ap = False                    # Einrichtungs-Hotspot aktiv
         self.networks = []                 # letzter WLAN-Scan [(ssid, signal, security)]
-        self.wifi_job = None               # (ssid, psk, hidden)
+        self.wifi_job = None               # (ssid, psk, hidden) oder {move, from}
         self.wifi_status = {"phase": "idle", "ssid": "", "error": ""}
         self.setup_job = None
         self.setup_draft = {}              # Eingaben des Assistenten (für einen 2. Versuch)
@@ -654,6 +654,7 @@ def make_handler(app):
             self.json({
                 "interfaces": netlib.interfaces(), "wifi_devices": app.net.refresh(),
                 "wifi_iface": app.net.iface, "saved": app.net.saved_wifi(),
+                "home_wifi": app.net.home_wifi(),
                 "networks": app.networks_json(), "hostname": app.hostname(),
                 "country": conf.get("WIFI_COUNTRY", "DE"), "countries": system.countries(),
                 "hotspot": app.ap, "ap_ssid": app.net.ap_ssid,
@@ -671,6 +672,23 @@ def make_handler(app):
             with app.lock:
                 app.wifi_job = (wifi["ssid"], wifi["psk"], wifi["hidden"])
                 app.wifi_status = {"phase": "connecting", "ssid": wifi["ssid"], "error": ""}
+            app.wake.set()
+            self.json()
+
+        def api_post_network_wifi_move(self, data):
+            iface = str(data.get("iface") or "")
+            if iface not in [d["iface"] for d in app.net.refresh()]:
+                raise ApiError("The selected Wi-Fi adapter is not available.")
+            home = app.net.home_wifi()
+            if not home:
+                raise ApiError("There is no Wi-Fi connection to move.")
+            if home["iface"] == iface:
+                raise ApiError("This adapter is already in use.")
+            app.select_wifi_iface(iface)
+            with app.lock:
+                app.wifi_job = {"move": home["connection"], "from": home["iface"]}
+                app.wifi_status = {"phase": "connecting", "error": "",
+                                   "ssid": home["connection"].removeprefix("wifi-")}
             app.wake.set()
             self.json()
 

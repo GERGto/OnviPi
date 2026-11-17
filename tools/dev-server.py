@@ -43,6 +43,7 @@ from onvipilib import CONF, load_conf, save_conf  # noqa: E402
 
 sim = {"configured": not args.setup, "ssh": False, "timezone": "Europe/Berlin",
        "wifi": None if args.setup else "wifi-Home", "saved": [] if args.setup else ["wifi-Home"],
+       "wifi_iface": "wlan0",
        "ip": {"method": "auto", "address": "", "prefix": "24", "gateway": "", "dns": []}}
 
 save_conf(CONF, {"CAM_NAME": "Garden", "CAM_USER": "admin", "CAM_PASSWORD": PASSWORD,
@@ -177,10 +178,10 @@ def devices():
         items.append({"iface": "eth0", "type": "ethernet", "state": "connected",
                       "connection": "Wired connection 1"})
     for w in WIFI:
-        mine = w["iface"] == "wlan0"
-        hotspot = mine and not sim["configured"]
+        hotspot = w["iface"] == "wlan0" and not sim["configured"]
+        mine = w["iface"] == sim["wifi_iface"] and not hotspot
         items.append({"iface": w["iface"], "type": "wifi",
-                      "state": "connected" if mine and (sim["wifi"] or hotspot) else "disconnected",
+                      "state": "connected" if hotspot or (mine and sim["wifi"]) else "disconnected",
                       "connection": netlib.HOTSPOT if hotspot else (sim["wifi"] or "") if mine else ""})
     return items
 
@@ -263,8 +264,13 @@ def worker(app):
                 sim["configured"] = True
                 app.setup_progress = {"phase": "done", "error": "", "ip": web.primary_ip()}
         job = app.take_wifi_job()
-        if job:
+        if isinstance(job, dict):
             time.sleep(4)
+            sim["wifi_iface"] = app.net.iface
+            app.wifi_status = {"phase": "done", "ssid": job["move"].removeprefix("wifi-"), "error": ""}
+        elif job:
+            time.sleep(4)
+            sim["wifi_iface"] = app.net.iface
             if job[1] == "wrongpass":
                 app.wifi_status = {"phase": "failed", "ssid": job[0], "error": (
                     f"Could not connect to “{job[0]}”. Please check the Wi-Fi password.")}

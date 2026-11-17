@@ -3,6 +3,19 @@
 All notable changes to OnviPi. Downloads are available under
 [Releases](https://github.com/GERGto/OnviPi/releases).
 
+## [2.6] – 2026-11-17
+
+### Fixed
+- **Fixed IP address lost when switching the Wi-Fi adapter.** Connecting to the same Wi-Fi
+  again (e.g. with a USB adapter) replaced its profile and fell back to DHCP. The fixed address,
+  router and DNS are now kept. If the new connection fails, the previous profile comes back
+  unchanged – before, it was already deleted.
+
+### Added
+- **Switch the Wi-Fi adapter with one tap:** choose another adapter under *Network* and press
+  *Apply*. The camera reconnects to the same network with the saved password and settings;
+  if that fails, it goes back to the previous adapter.
+
 ## [2.5] – 2026-11-13
 
 ### Fixed

@@ -72,6 +72,19 @@ def process_wifi_job(app):
     job = app.take_wifi_job()
     if not job:
         return None
+    if isinstance(job, dict):   # bestehendes WLAN auf einen anderen Adapter umziehen
+        ssid = job["move"].removeprefix("wifi-")
+        time.sleep(2)
+        ok, _ = app.net.move_wifi(job["move"], job["from"])
+        if ok:
+            app.wifi_status = {"phase": "done", "ssid": ssid, "error": ""}
+            restart_services("onvipi-mqtt.service")
+        else:
+            app.select_wifi_iface(job["from"])
+            app.wifi_status = {"phase": "failed", "ssid": ssid, "error": (
+                f"Could not connect to “{ssid}” with the selected adapter. "
+                "The camera stays on the previous one.")}
+        return ok
     ssid = job[0]
     time.sleep(2)  # Antwort an den Browser noch ausliefern lassen
     ok, _ = app.net.connect_new(*job)

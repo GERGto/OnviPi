@@ -164,7 +164,7 @@ The ONVIF integration has no IP sensor. With the optional MQTT connection (exper
 | **Overview** | live view, warnings (power, heat, missing camera), load, network | |
 | **Cameras** | on/off, name, motion detection, motion areas, privacy masks, picture and sound | ONVIF port, RTSP address, device ID |
 | **Recordings** | gallery by camera and day: watch, download, delete; recording settings | |
-| **Network** | connections, change Wi-Fi, choose the Wi-Fi adapter | fixed IP, hostname, Wi-Fi country |
+| **Network** | connections, change Wi-Fi, switch the Wi-Fi adapter (keeps password and fixed IP) | fixed IP, hostname, Wi-Fi country |
 | **Connect** | use on its own, Home Assistant step by step, addresses for other apps | MQTT sensors |
 | **Updates** | installed version, check for updates, automatic updates on/off | |
 | **System** | password, time zone, restart, log, backup/restore, factory reset | SSH |

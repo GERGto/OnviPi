@@ -18,7 +18,11 @@ os.environ.update(ONVIPI_CONF_DIR=TMP, ONVIPI_RUN_DIR=os.path.join(TMP, "run"),
 os.makedirs(os.environ["ONVIPI_RUN_DIR"], exist_ok=True)
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "onvipi", "pi"))
 
+import subprocess  # noqa: E402
+from unittest import mock  # noqa: E402
+
 import onvipi_camera as camera  # noqa: E402
+import onvipi_net as netlib  # noqa: E402
 import onvipi_onvif as onvif  # noqa: E402
 import onvipi_record as record  # noqa: E402
 import onvipi_stream as stream  # noqa: E402
@@ -283,6 +287,109 @@ class Updates(unittest.TestCase):
         save_conf(CONF, {})
         update.main(["auto"])
         self.assertEqual(self.calls, [])                     # development builds are left alone
+
+
+class FakeNM:
+    """Minimal NetworkManager: profiles {name: {iface, ip, psk}}, active {iface: name}."""
+    FIXED = {"method": "manual", "address": "192.168.1.50", "prefix": "24",
+             "gateway": "192.168.1.1", "dns": ["192.168.1.1"]}
+
+    def __init__(self, fail_on=None):
+        self.fail_on = fail_on   # activating a profile on this device fails
+        self.profiles = {"wifi-Home": {"iface": "wlan0", "ip": dict(self.FIXED), "psk": "secret123"}}
+        self.active = {"wlan0": "wifi-Home", "wlan1": ""}
+
+    def _off(self, name):
+        for k, v in self.active.items():
+            if v == name:
+                self.active[k] = ""
+
+    def __call__(self, *a, timeout=30):
+        ok, a = subprocess.CompletedProcess(a, 0, "", ""), list(a)
+        if a[:2] == ["con", "delete"]:
+            self.profiles.pop(a[2], None)
+            self._off(a[2])
+        elif a[:2] == ["con", "modify"]:
+            p = self.profiles[a[2]]
+            if "connection.interface-name" in a:
+                p["iface"] = a[a.index("connection.interface-name") + 1]
+            if "connection.id" in a:
+                new = a[a.index("connection.id") + 1]
+                self.profiles[new] = self.profiles.pop(a[2])
+                for k, v in self.active.items():
+                    if v == a[2]:
+                        self.active[k] = new
+        elif a[:2] == ["con", "add"]:
+            ip = {"method": "auto"}
+            if "ipv4.method" in a:
+                addr = a[a.index("ipv4.addresses") + 1].split("/")
+                ip = {"method": "manual", "address": addr[0], "prefix": addr[1],
+                      "gateway": a[a.index("ipv4.gateway") + 1], "dns": a[a.index("ipv4.dns") + 1].split()}
+            self.profiles[a[a.index("con-name") + 1]] = {
+                "iface": a[a.index("ifname") + 1], "ip": ip, "psk": a[a.index("wifi-sec.psk") + 1]}
+        elif "up" in a:
+            name = a[a.index("up") + 1]
+            iface = self.profiles[name]["iface"]
+            if iface == self.fail_on:
+                return subprocess.CompletedProcess(a, 4, "", "Secrets were required")
+            self._off(name)
+            self.active[iface] = name
+        elif "down" in a:
+            self._off(a[a.index("down") + 1])
+        return ok
+
+    def patches(self):
+        return [mock.patch.object(netlib, "nmcli", self),
+                mock.patch.object(netlib.time, "sleep", lambda s: None),
+                mock.patch.object(netlib, "devices", lambda: [
+                    {"iface": k, "type": "wifi", "state": "connected" if v else "disconnected",
+                     "connection": v} for k, v in self.active.items()]),
+                mock.patch.object(netlib, "wifi_devices", lambda: [
+                    {"iface": "wlan0", "usb": False, "label": ""}, {"iface": "wlan1", "usb": True, "label": ""}]),
+                mock.patch.object(netlib, "ip_config", lambda c: dict(self.profiles[c]["ip"])),
+                mock.patch.object(netlib.Net, "saved_wifi", lambda s: list(self.profiles))]
+
+
+class WifiAdapterSwitch(unittest.TestCase):
+    """Switching from the built-in Wi-Fi to a USB adapter keeps password and fixed IP."""
+
+    def run_with(self, nm, action):
+        for p in nm.patches():
+            p.start()
+            self.addCleanup(p.stop)
+        net = netlib.Net({"WIFI_IFACE": "wlan1"})
+        self.assertEqual(net.home_wifi(), {"connection": "wifi-Home", "iface": "wlan0"})
+        return action(net)
+
+    def test_move_keeps_profile(self):
+        nm = FakeNM()
+        ok, _ = self.run_with(nm, lambda net: net.move_wifi("wifi-Home", "wlan0"))
+        self.assertTrue(ok)
+        self.assertEqual(nm.active, {"wlan0": "", "wlan1": "wifi-Home"})
+        self.assertEqual(nm.profiles["wifi-Home"]["ip"], FakeNM.FIXED)
+
+    def test_move_failure_goes_back(self):
+        nm = FakeNM(fail_on="wlan1")
+        ok, _ = self.run_with(nm, lambda net: net.move_wifi("wifi-Home", "wlan0"))
+        self.assertFalse(ok)
+        self.assertEqual(nm.active, {"wlan0": "wifi-Home", "wlan1": ""})
+        self.assertEqual(nm.profiles["wifi-Home"]["iface"], "wlan0")
+
+    def test_reconnect_keeps_fixed_ip(self):
+        nm = FakeNM()
+        ok, _ = self.run_with(nm, lambda net: net.connect_new("Home", "newpass12", False))
+        self.assertTrue(ok)
+        self.assertEqual(list(nm.profiles), ["wifi-Home"])          # backup removed
+        self.assertEqual(nm.profiles["wifi-Home"]["iface"], "wlan1")
+        self.assertEqual(nm.profiles["wifi-Home"]["ip"], FakeNM.FIXED)
+
+    def test_reconnect_failure_restores_old_profile(self):
+        nm = FakeNM(fail_on="wlan1")
+        ok, _ = self.run_with(nm, lambda net: net.connect_new("Home", "wrongpass", False))
+        self.assertFalse(ok)
+        self.assertEqual(list(nm.profiles), ["wifi-Home"])
+        self.assertEqual(nm.profiles["wifi-Home"], {"iface": "wlan0", "ip": FakeNM.FIXED, "psk": "secret123"})
+        self.assertEqual(nm.active, {"wlan0": "wifi-Home", "wlan1": ""})
 
 
 if __name__ == "__main__":

@@ -366,18 +366,58 @@ class Net:
         return any(d["iface"] == self.iface and d["state"] == "connected"
                    and d["connection"] != HOTSPOT for d in devices())
 
+    def home_wifi(self):
+        """{connection, iface} der aktiven Heimnetz-WLAN-Verbindung oder None."""
+        return next(({"connection": d["connection"], "iface": d["iface"]} for d in devices()
+                     if d["type"] == "wifi" and d["state"] == "connected"
+                     and d["connection"] not in ("", HOTSPOT)), None)
+
+    def move_wifi(self, name, old_iface):
+        """Gespeichertes WLAN-Profil auf self.iface umhängen. Das Passwort bleibt im Profil.
+
+        Klappt die Verbindung über das neue Gerät nicht, kommt das Profil zurück auf das
+        alte Gerät und wird dort wieder verbunden.
+        """
+        if nmcli("con", "modify", name, "connection.interface-name", self.iface).returncode != 0:
+            return False, "could not change the connection profile"
+        if not self.independent:
+            self.hotspot_down()
+        r = nmcli("-w", str(CONNECT_TIMEOUT), "con", "up", name, timeout=CONNECT_TIMEOUT + 15)
+        if r.returncode == 0:
+            for _ in range(5):
+                if self.wifi_connected():
+                    log.info("Moved '%s' from %s to %s", name, old_iface, self.iface)
+                    return True, ""
+                time.sleep(2)
+        log.warning("Moving '%s' to %s failed: %s", name, self.iface, r.stderr.strip())
+        nmcli("con", "modify", name, "connection.interface-name", old_iface)
+        nmcli("con", "up", name, timeout=CONNECT_TIMEOUT)
+        return False, r.stderr.strip()
+
     def connect_new(self, ssid, psk, hidden):
         """Neues WLAN verbinden. Gibt (ok, Fehlermeldung) zurück.
 
         Läuft der Hotspot auf demselben Gerät, wird er dafür abgeschaltet (der Aufrufer
         startet ihn bei Misserfolg wieder). Ein vorher aktives WLAN wird bei Misserfolg
         wiederhergestellt.
+
+        Gibt es schon ein Profil für dieses WLAN (z. B. beim Wechsel auf einen anderen
+        Adapter), werden seine IP-Einstellungen (feste Adresse) übernommen. Das alte Profil
+        wird erst nach erfolgreicher Verbindung gelöscht, bei Misserfolg kommt es zurück.
         """
         name = "wifi-" + re.sub(r"[^A-Za-z0-9_.-]+", "_", ssid)[:40]
         previous = next((d["connection"] for d in devices()
                          if d["iface"] == self.iface and d["state"] == "connected"
                          and d["connection"] not in ("", HOTSPOT, name)), None)
-        nmcli("con", "delete", name)
+        backup, ip = None, None
+        if name in self.saved_wifi():
+            ip = ip_config(name)
+            backup = name + ".previous"
+            nmcli("con", "delete", backup)
+            if nmcli("con", "modify", name, "connection.id", backup,
+                     "connection.autoconnect", "no").returncode != 0:
+                nmcli("con", "delete", name)
+                backup = None
         args = ["con", "add", "type", "wifi", "ifname", self.iface, "con-name", name,
                 "ssid", ssid, "connection.autoconnect", "yes",
                 "connection.autoconnect-priority", "10"]
@@ -385,20 +425,33 @@ class Net:
             args += ["802-11-wireless.hidden", "yes"]
         if psk:
             args += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", psk]
+        if ip and ip["method"] == "manual" and ip["address"]:
+            args += ["ipv4.method", "manual", "ipv4.addresses", f"{ip['address']}/{ip['prefix']}"]
+            if ip["gateway"]:
+                args += ["ipv4.gateway", ip["gateway"]]
+            if ip["dns"]:
+                args += ["ipv4.dns", " ".join(ip["dns"])]
         r = nmcli(*args)
-        if r.returncode != 0:
-            return False, r.stderr.strip() or "could not create connection profile"
-        if not self.independent:
-            self.hotspot_down()
-        r = nmcli("-w", str(CONNECT_TIMEOUT), "con", "up", name, timeout=CONNECT_TIMEOUT + 15)
         if r.returncode == 0:
-            for _ in range(5):
-                if self.wifi_connected():
-                    log.info("Connected to '%s' on %s", ssid, self.iface)
-                    return True, ""
-                time.sleep(2)
-        log.warning("Connecting to '%s' failed: %s", ssid, r.stderr.strip())
+            if not self.independent:
+                self.hotspot_down()
+            if backup and ip and ip["method"] == "manual":
+                nmcli("con", "down", backup, timeout=20)   # dieselbe feste Adresse nicht doppelt
+            r = nmcli("-w", str(CONNECT_TIMEOUT), "con", "up", name, timeout=CONNECT_TIMEOUT + 15)
+            if r.returncode == 0:
+                for _ in range(5):
+                    if self.wifi_connected():
+                        log.info("Connected to '%s' on %s", ssid, self.iface)
+                        if backup:
+                            nmcli("con", "delete", backup)
+                        return True, ""
+                    time.sleep(2)
+        err = r.stderr.strip() or "could not create connection profile"
+        log.warning("Connecting to '%s' failed: %s", ssid, err)
         nmcli("con", "delete", name)
-        if previous:
+        if backup:
+            nmcli("con", "modify", backup, "connection.id", name, "connection.autoconnect", "yes")
+            nmcli("con", "up", name, timeout=CONNECT_TIMEOUT)
+        elif previous:
             nmcli("con", "up", previous, timeout=CONNECT_TIMEOUT)
-        return False, r.stderr.strip()
+        return False, err
